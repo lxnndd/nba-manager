@@ -1,0 +1,810 @@
+// 引擎数值自测：node 下直接运行（编译后）
+// 验证：名单结构、比分分布、全季推进、季后赛、赛季奖项、休赛期（FA/AI交易）、存档迁移
+import { createLeague, createRealLeague, repositionPlayer, bodyKeys, genRookie, genDraftClass, genFreeAgent, TEAM_STYLES, COACH_STYLES, applyTeamStyle, applyCoachStyle, assignTags, calcOvr, SKILL_KEYS, genSkills, POS_SEC } from './gen';
+import { simulateGame, bondMods, teamEffMods } from './sim';
+import { simDay, runPlayoffRound, simPlayoffGame, playoffChampion, evaluateTrade, applyTrade, standings, leaders, nextGameOf, playedCount, migrateSave, teamStrength, pickValue, tradeValue, ROSTER_MAX, payrollOf, SALARY_CAP, TAX_LINE, refreshPlayoffPlaceholders } from './league';
+import { computeSeasonAwards, computeFinalsMVP } from './awards';
+import { rollPostGameEvent, resolveTeamEvent } from './events';
+import type { Player } from './types';
+import {
+  beginOffseason, settleFreeAgency, simulateOffseasonAI, simulateAIOffseasonTrades,
+  finishOffseason, cutPlayer, askFor, signFreeAgentNow, agePlayer, growthPointsFor, timeCoefOf, agingPenaltyOf, spendPoint, autoDistribute, recalcOvr,
+  draftComplete, draftIsUserTurn, draftPickUser, draftRemaining,
+} from './offseason';
+import { mulberry32 } from './rng';
+import type { LeagueState } from './types';
+
+let fails = 0;
+function ok(cond: boolean, label: string) {
+  if (!cond) { fails++; console.log('  !! 断言失败:', label); }
+}
+function checkRoster(l: LeagueState, tag: string, max = ROSTER_MAX) {
+  for (const t of l.teams) {
+    ok(t.players.length >= 13 && t.players.length <= max, `${tag} ${t.abbr} 名单人数 ${t.players.length}`);
+    for (const pos of ['PG', 'SG', 'SF', 'PF', 'C']) {
+      ok(t.players.some((p) => p.pos === pos), `${tag} ${t.abbr} 缺位置 ${pos}`);
+    }
+  }
+}
+
+function fullPlayoffs(l: LeagueState): number {
+  // 季后赛不得污染常规赛统计（修复 92/82 bug 的回归断言）
+  const before = new Map<number, number>();
+  for (const t of l.teams) for (const p of t.players) before.set(p.id, p.gp);
+  for (let r = 0; r < 4; r++) {
+    runPlayoffRound(l, r);
+    for (let i = 0; i < l.playoffRounds[r].series.length; i++) {
+      const ser = l.playoffRounds[r].series[i];
+      while (ser.awayWins < 4 && ser.homeWins < 4) simPlayoffGame(l, r, i);
+    }
+  }
+  let same = true;
+  for (const t of l.teams) for (const p of t.players) if (before.get(p.id) !== p.gp) { same = false; break; }
+  ok(same, '季后赛不累计常规统计（gp 不超 82）');
+  return playoffChampion(l) ?? -1;
+}
+
+// 休赛期全流程（含 FA 报价走查）+ 不变量断言
+function runOffseasonFlow(l: LeagueState, tag: string, offerTest: boolean): void {
+  computeSeasonAwards(l);
+  const aw = l.awards;
+  ok(!!aw && aw.season === l.season, `${tag} 奖项已评`);
+  ok(!!aw?.mvp, `${tag} MVP 有主`);
+  ok(!!aw?.dpoy, `${tag} DPOY 有主`);
+  ok(!!aw?.sixth, `${tag} 最佳第六人有主`);
+  ok(!!aw?.rookie, `${tag} 最佳新秀有主`);
+  // v2.0：常规奖不含 FMVP；FMVP 由总决赛战报独立计算（冠军产生后）
+  ok(!Object.prototype.hasOwnProperty.call(aw ?? {}, 'fmvp'), `${tag} 常规奖不含 FMVP 字段`);
+  const fm = computeFinalsMVP(l);
+  ok(!!fm, `${tag} 总决赛 FMVP 有主（冠军界面展示）`);
+  const allNbaIds = aw?.allNba.flat().map((e) => e.playerId) ?? [];
+  ok(new Set(allNbaIds).size === allNbaIds.length, `${tag} All-NBA 15 人无重复`);
+  ok(!!aw && aw.allNba.every((team) => team.length === 5), `${tag} All-NBA 每阵 5 人`);
+  // v2.0 一防二防：每阵 5 人无重复，后场 2 + 前场 3 结构
+  ok(!!aw && aw.allDefense?.length === 2 && aw.allDefense.every((t) => t.length === 5), `${tag} All-Defense 两阵 ×5`);
+  const defIds = aw?.allDefense.flat().map((e) => e.playerId) ?? [];
+  ok(new Set(defIds).size === defIds.length, `${tag} All-Defense 10 人无重复`);
+  if (aw?.sixth) {
+    const p = l.teams[aw.sixth.teamId].players.find((q) => q.id === aw.sixth!.playerId)!;
+    ok(p.starts < p.gp / 2, `${tag} 第六人非首发（首发 ${p.starts}/${p.gp}）`);
+  }
+  if (aw?.rookie) {
+    const p = l.teams[aw.rookie.teamId].players.find((q) => q.id === aw.rookie!.playerId)!;
+    ok(p.exp === 1, `${tag} 最佳新秀为一年级`);
+  }
+  const mvpName = aw?.mvp ? l.teams[aw.mvp.teamId].players.find((q) => q.id === aw.mvp!.playerId)?.name : null;
+  const fmName = fm ? l.teams[fm.teamId].players.find((q) => q.id === fm.playerId)?.name : null;
+  console.log(`  ${tag} 奖项: MVP ${mvpName} · DPOY ${aw?.dpoy ? l.teams[aw.dpoy.teamId].players.find((q) => q.id === aw.dpoy!.playerId)?.name : '-'} · 常规 FMVP ${fmName}`);
+
+  beginOffseason(l);
+  ok(l.offseason && l.offseasonStep === 1, `${tag} 休赛期状态`);
+  ok(l.history.length > 0 && l.history[l.history.length - 1].season === l.season, `${tag} history 入账`);
+  ok(l.history[l.history.length - 1].finalsMvpId === fm?.playerId, `${tag} history FMVP 记录`);
+  // v2.0 休赛期重置字段
+  ok(l.faDay === 1 && (l.faOffers?.length ?? 0) === 0 && !l.poffExitShown, `${tag} FA 7 天窗口重置`);
+  // v2.1 选秀大会：池 80 人 / 30 签；轮到玩家签可手动挑选；随后一键完成
+  const d0 = l.draft;
+  ok(!!d0 && d0.class.length === 80 && d0.order.length === 30 && d0.picked.length === 0, `${tag} 选秀池初始化（80 人 / ${d0?.order.length} 签）`);
+  if (d0 && l.userTeamId >= 0 && draftIsUserTurn(l)) {
+    const best = [...d0.class].sort((a, b) => b.ovr - a.ovr)[0];
+    ok(!!best && draftPickUser(l, best.id), `${tag} 玩家持有的签可手动挑选`);
+  }
+  draftComplete(l);
+  ok(l.draft === null, `${tag} 选秀全部完成（含玩家签代选兜底）`);
+  ok(l.news.some((n) => n.includes('本届选秀共 80 人')), `${tag} 80 人选秀大会报告`);
+  console.log(`  ${tag} 退役消息 ${l.news.filter((n) => n.includes('退役')).length} 条；自由市场 ${l.freeAgents.length} 人`);
+
+  if (offerTest && l.freeAgents.length > 0) {
+    l.userTeamId = 0;
+    const me = l.teams[0];
+    // 裁人：最弱（非唯一位置）应成功
+    const weakest = [...me.players].sort((a, b) => a.ovr - b.ovr)[0];
+    const cutOk = cutPlayer(l, weakest.id);
+    ok(cutOk, `${tag} 裁人成功`);
+    const solo = me.players.find((p) => me.players.filter((q) => q.pos === p.pos).length === 1);
+    if (solo) ok(!cutPlayer(l, solo.id), `${tag} 位置保护：不可裁唯一位置球员`);
+    // 低价 FA（要价 250 档）以底薪 300 报价 → 应成交（AI 竞价上限 < ask×1.08）
+    const cheap = [...l.freeAgents].sort((a, b) => askFor(a) - askFor(b))[0];
+    const ask = askFor(cheap);
+    const results = settleFreeAgency(l, [{ pid: cheap.id, years: 2, salary: Math.max(300, ask) }]);
+    const r0 = results[0];
+    ok(!!r0 && r0.ok && r0.won, `${tag} 底薪报价成交（ask=${ask}）: ${r0?.note}`);
+    ok(me.players.length <= ROSTER_MAX, `${tag} 签约后名单 ≤${ROSTER_MAX}`);
+    ok(cheap.contractYears === 2, `${tag} 合同年限写入`);
+  }
+  simulateOffseasonAI(l);
+  simulateAIOffseasonTrades(l);
+  const trades = l.news.filter((n) => n.includes('交易：')).length;
+  console.log(`  ${tag} AI 补强签约 ${l.news.filter((n) => n.includes('加盟')).length} 条；AI 交易 ${trades} 笔`);
+  checkRoster(l, `${tag} FA结算后`);
+  finishOffseason(l);
+  ok(!l.offseason && l.offseasonStep === 0, `${tag} 休赛期结束`);
+  ok(l.day === 0 && l.season >= 2, `${tag} 新赛季重置`);
+  ok(l.results.length === 0 && l.playoffRounds.length === 0, `${tag} 季后赛/结果清空`);
+  ok(l.schedule.length === 170, `${tag} 新赛程 170 天`);
+  checkRoster(l, `${tag} 新赛季`, 15); // 开季裁至 15
+  ok(l.teams.every((t) => t.players.every((p) => p.gp === 0 && p.starts === 0)), `${tag} 赛季数据重置`);
+  ok(l.draftPool.length === 30 && l.draftPool.every((pk, i) => pk.o === i && pk.f === i), `${tag} 首轮签池重置 30 枚`);
+  // v2.0 加点兜底：所有人点数清零（未手动分配的被自动分配）
+  ok(l.teams.every((t) => t.players.every((p) => (p.points ?? 0) === 0)), `${tag} 加点全部分配/清零`);
+  const names = new Set(l.teams.flatMap((t) => t.players).map((p) => p.name));
+  ok(names.size > 400, `${tag} 球员池充足（${names.size}）`);
+}
+
+// 模拟一段常规赛 + 季后赛 + 汇总
+function simSeason(l: LeagueState, label: string): void {
+  console.log(`== 全季模拟（${label}）==`);
+  const t0 = Date.now();
+  while (l.day < l.totalDays) simDay(l);
+  const agg = { pts: 0, reb: 0, ast: 0, tov: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, games: 0 };
+  for (const t of l.teams) for (const p of t.players) {
+    const s = p.stats;
+    agg.pts += s.pts; agg.reb += s.reb; agg.ast += s.ast; agg.tov += s.tov;
+    agg.fgm += s.fgm; agg.fga += s.fga; agg.tpm += s.tpm; agg.tpa += s.tpa;
+    agg.ftm += s.ftm; agg.fta += s.fta; agg.games += p.gp;
+  }
+  const tg = 1230;
+  console.log(`耗时 ${Date.now() - t0}ms | 场均 ${(agg.pts / tg).toFixed(1)} 分/队 | FG ${(agg.fgm / agg.fga * 100).toFixed(1)}% | 3P ${(agg.tpm / agg.tpa * 100).toFixed(1)}% | FT ${(agg.ftm / agg.fta * 100).toFixed(1)}%`);
+  console.log(`篮板 ${(agg.reb / tg).toFixed(1)} | 助攻 ${(agg.ast / tg).toFixed(1)} | 失误 ${(agg.tov / tg).toFixed(1)}`);
+  for (const t of l.teams) for (const p of t.players) ok(p.gp <= 82, `${label} ${p.name} gp=${p.gp} 超过 82`);
+}
+
+function run(): void {
+  const seed = Number(process.env.TEST_SEED || 20250906);
+  console.log('== 联赛生成（虚构）==');
+  const l = createLeague(seed);
+  checkRoster(l, '初始');
+  ok(l.freeAgents.length >= 55, `虚构开档即有自由市场（${l.freeAgents.length} 人）`);
+  console.log('30 队 · 赛程天数', l.totalDays);
+
+  console.log('== v1.2/v1.3 球队气质 · 风格 · 标签羁绊 · 新秀压制 ==');
+  ok(l.teams.every((t) => typeof t.chemistry === 'number' && typeof t.discipline === 'number' && typeof t.brand === 'number' && t.fans > 0), '球队气质字段存在');
+  ok(l.teams.every((t) => typeof t.style === 'string'), '球队风格字段存在（AI 队同样拥有）');
+  ok(l.teams[0].players.every((p) => p.grow >= 0.6 && p.grow <= 1.8), `球员成长率 grow 0.6-1.8（实测 ${l.teams[0].players[0].grow}）`);
+  {
+    const cl = createLeague(seed + 991);
+    cl.userTeamId = 2;
+    // v2.0 风格拆分：球队风格二选一 + 执教风格三选一
+    applyTeamStyle(cl, 'youth');
+    applyCoachStyle(cl, 'iron');
+    ok(
+      cl.cultureId === 'youth' && cl.teams[2].style === 'youth'
+      && cl.teams[2].coachStyle === 'iron' && cl.teams[2].discipline === 58,
+      `双风格：青春风暴(youth) + 铁血手腕(discipline 58)（实测 disc=${cl.teams[2].discipline}）`
+    );
+    ok(cl.teams[2].style !== cl.teams[2].coachStyle, '球队风格与执教风格独立字段');
+    // 非用户队不受影响（AI 气质保持随机基线 45-55）
+    ok(cl.teams[3].chemistry >= 45 && cl.teams[3].chemistry <= 55, 'AI 队气质保持随机基线');
+  }
+  {
+    // 风格标签：ovr≥80 一个、≥90 两个；低 ovr 无标签
+    const mk = (ovr: number, attrs: Partial<import('./types').Attrs> = {}) =>
+      ({ ovr, attrs: { three: 60, mid: 60, inside: 60, ath: 60, def: 60, pas: 60, reb: 60, ...attrs } }) as unknown as Player;
+    ok(assignTags(mk(75)).length === 0, '75 能力无标签');
+    ok(assignTags(mk(80, { three: 80 })).length === 1, '80 能力 1 个标签');
+    ok(assignTags(mk(95, { three: 80, pas: 80 })).length === 2, '90+ 能力 2 个标签');
+    ok(assignTags(mk(85)).length === 1 && assignTags(mk(85))[0] === '全能战士', '80+ 无突出属性兜底全能战士');
+    ok(assignTags(mk(95, { three: 80, pas: 80, def: 80 }))[0] === '三分神射' || assignTags(mk(95, { three: 80, pas: 80, def: 80 })).includes('三分神射'), '标签按属性特征判定');
+    // 羁绊：同队同标签 2 人起生效、人数越多越强
+    const bTeam = createLeague(seed + 993).teams[0];
+    const star = bTeam.players.find((p) => p.ovr >= 80)!;
+    const mate = { ...star, id: 999999, name: star.name + '甲' } as unknown as Player;
+    bTeam.players.push(mate);
+    const b1 = bondMods(bTeam);
+    bTeam.players.push({ ...mate, id: 999998, name: star.name + '乙' } as unknown as Player);
+    bTeam.players.push({ ...mate, id: 999997, name: star.name + '丙' } as unknown as Player);
+    const b3 = bondMods(bTeam);
+    ok(b1.off > 0, `羁绊 2 人组生效（off=${b1.off.toFixed(4)}）`);
+    ok(b3.off > b1.off * 1.5, `羁绊人数越多越强（2人=${b1.off.toFixed(4)} → 4人=${b3.off.toFixed(4)}）`);
+    // 风格对比赛系数：青春风暴（29 岁以下多）> 中性；铁血（执教风格）季后赛防守更低；商业价值（执教）主场加成提升
+    const styT = createLeague(seed + 994).teams[7];
+    styT.style = null;
+    styT.coachStyle = null;
+    const base = teamEffMods(styT, false, false, 100);
+    styT.style = 'youth';
+    const youth = teamEffMods(styT, false, false, 100);
+    ok(youth.off > base.off, `青春风暴 29 岁以下战力加成（${base.off.toFixed(4)} → ${youth.off.toFixed(4)}）`);
+    styT.style = null;
+    styT.coachStyle = 'iron';
+    const ironReg = teamEffMods(styT, false, false, 100);
+    const ironPoff = teamEffMods(styT, false, true, 100);
+    ok(ironPoff.def < ironReg.def, `铁血手腕季后赛防守加成（常规 ${ironReg.def.toFixed(4)} → 季后赛 ${ironPoff.def.toFixed(4)}）`);
+    styT.coachStyle = 'brand';
+    styT.fans = 140; // 确定性粉丝量（>100 均值 → 主场粉丝系数生效）
+    const brandAway = teamEffMods(styT, false, false, 100).off;
+    const brandHome = teamEffMods(styT, true, false, 100).off;
+    styT.coachStyle = null;
+    const normAway = teamEffMods(styT, false, false, 100).off;
+    const normHome = teamEffMods(styT, true, false, 100).off;
+    ok(brandHome - brandAway > normHome - normAway, '商业价值（执教风格）提升主场粉丝加成');
+  }
+  {
+    // v2.0 成长点数制：潜力星 × 阶段(18-25 ×3 / 26-29 ×2) × 出场时间系数；30+ 无加点+衰减
+    const mkP = (age: number, pot = 8, mpg = 22) => {
+      const p = genRookie(mulberry32(900 + age), 3, { v: -1 });
+      p.age = age;
+      p.potential = pot;
+      p.gp = 50;
+      p.stats.min = mpg * 50;
+      return p;
+    };
+    // 时间系数表
+    ok(timeCoefOf(mkP(24, 8, 4)) === 0.8, '出场<5min 系数 0.8');
+    ok(timeCoefOf(mkP(24, 8, 7)) === 0.9, '5-10min 系数 0.9');
+    ok(timeCoefOf(mkP(24, 8, 12)) === 1, '10-15min 系数 1');
+    ok(timeCoefOf(mkP(24, 8, 17)) === 1.1, '15-20min 系数 1.1');
+    ok(timeCoefOf(mkP(24, 8, 23)) === 1.2, '20-25min 系数 1.2');
+    ok(timeCoefOf(mkP(24, 8, 30)) === 1.3, '25+min 系数 1.3');
+    // 加点总量：24 岁 pot8 ×3 ×1.2 ≈ 29；27 岁 ×2 ×1.2 ≈ 19；38 岁 0
+    const g24 = growthPointsFor(mkP(24, 8, 22));
+    const g27 = growthPointsFor(mkP(27, 8, 22));
+    const g38 = growthPointsFor(mkP(38, 8, 30));
+    console.log(`  加点量：24岁 pot8 → ${g24} 点 / 27岁 → ${g27} 点 / 38岁 → ${g38} 点`);
+    ok(g24 === 29, `18-25 黄金期 ×3（${g24}）`);
+    ok(g27 === 19, `26-29 稳步期 ×2（${g27}）`);
+    ok(g38 === 0, '30+ 无加点');
+    // 老将衰减：30-32 每季 -2 点；以技能总和下降断言（ovr 取整可能不变）
+    const oldP = mkP(30, 8, 30);
+    oldP.skills = JSON.parse(JSON.stringify(oldP.skills));
+    const sumBefore = SKILL_KEYS.reduce((s, k) => s + oldP.skills[k], 0);
+    agePlayer(mulberry32(5), oldP, null);
+    const sumAfter = SKILL_KEYS.reduce((s, k) => s + oldP.skills[k], 0);
+    ok(sumAfter < sumBefore, `30 岁老将每季衰减（技能总 ${sumBefore}→${sumAfter}）`);
+    ok(agingPenaltyOf(mkP(31)) === 2 && agingPenaltyOf(mkP(34)) === 4 && agingPenaltyOf(mkP(38)) === 6, '衰减档位 2/4/6');
+    ok(agingPenaltyOf(mkP(25)) === 0, '成长期无衰减');
+    // 加点操作：spendPoint 消耗点数、技能 +1、总评重算；autoDistribute 清零
+    const g24p = mkP(24, 8, 22);
+    g24p.skills = JSON.parse(JSON.stringify(g24p.skills));
+    g24p.points = g24;
+    const sBefore = g24p.skills.three;
+    const ovrS = g24p.ovr;
+    spendPoint(g24p, 'three', 1);
+    ok(g24p.points === g24 - 1 && g24p.skills.three === sBefore + 1, 'spendPoint 消耗点数并加技能');
+    ok(g24p.ovr >= ovrS, `加点后总评不回退（${ovrS}→${g24p.ovr}）`);
+    autoDistribute(mulberry32(7), g24p);
+    ok(g24p.points === 0, 'autoDistribute 清零（AI 兜底分配）');
+    // v2.1 自动分配规则：优先加到突出能力、单项 ≤90
+    const ap = mkP(22, 10, 30);
+    ap.skills = JSON.parse(JSON.stringify(ap.skills));
+    // 构造 3 项突出（88）+ 其余 55
+    for (const k of SKILL_KEYS) ap.skills[k] = 55;
+    ap.skills.three = 88; ap.skills.mid = 87; ap.skills.dr = 86;
+    ap.points = 40;
+    autoDistribute(mulberry32(9), ap);
+    ok(ap.skills.three === 90 && ap.skills.mid === 90 && ap.skills.dr === 90, `优先加突出能力至 90 封顶（three88→${ap.skills.three} mid87→${ap.skills.mid} dr86→${ap.skills.dr}）`);
+    ok(ap.points === 0, 'autoDistribute 清空全部点数');
+    ok(SKILL_KEYS.every((k) => ap.skills[k] <= 90), '自动分配单项不超过 90');
+    // recalcOvr：技能变化 → 真实名单基准制（baseOvr+增量）
+    const rp = mkP(24, 8, 22);
+    rp.baseOvr = 93; rp.baseSkills = JSON.parse(JSON.stringify(rp.skills));
+    const beforeCalc = rp.ovr;
+    rp.skills.three += 5;
+    recalcOvr(rp);
+    ok(rp.ovr >= beforeCalc, `基准制总评：技能+5 → ovr 增量上升（${beforeCalc}→${rp.ovr}）`);
+  }
+  {
+    // 赛后随机事件：40 次必然触发（45%/场），属性变化 + news 记录；v2.0 带选项事件可处理
+    const ev = createLeague(seed + 992);
+    ev.userTeamId = 0;
+    for (let i = 0; i < 40; i++) rollPostGameEvent(ev, i % 2 === 0, 100 + i, i);
+    ok(ev.news.some((n) => n.includes('📰')), '赛后事件触发并写入动态');
+    ok(ev.teams[0].chemistry >= 0 && ev.teams[0].chemistry <= 100, 'chemistry 保持在 0-100');
+    ok(ev.teams[0].fans >= 20 && ev.teams[0].fans <= 600, 'fans 保持在 20-600 万');
+    ok((ev.pendingEvents?.length ?? 0) <= 5, `待处理事件不积压（${ev.pendingEvents?.length ?? 0} 条）`);
+    // 处理一条带选项事件：二选一应用效果并移除
+    if (ev.pendingEvents && ev.pendingEvents.length > 0) {
+      const pend = ev.pendingEvents[0];
+      const before = ev.teams[0][pend.options[0].key];
+      resolveTeamEvent(ev, pend.id, pend.options[0]);
+      ok(!ev.pendingEvents?.some((e) => e.id === pend.id), '事件处理后移除');
+      ok(ev.teams[0][pend.options[0].key] === before + pend.options[0].delta, `选项效果应用（${before}→${ev.teams[0][pend.options[0].key]}）`);
+      ok(ev.news.some((n) => n.includes('已处理')), '处理结果写入动态');
+    }
+  }
+  {
+    // 新秀压制：ovr≤80（<85）、潜力星级 ≤8；v2.1 选秀大会 80 人（美 70% 英文名 / 中 5% 中文名）
+    // 恰好 1 名总评 ≥80（不锁定状元：随机顺位）
+    const rng = mulberry32(seed + 555);
+    let maxOvr = 0, maxPot = 0;
+    for (let i = 0; i < 300; i++) {
+      const r = genRookie(rng, Math.floor(i / 20), { v: 10000 + i });
+      maxOvr = Math.max(maxOvr, r.ovr);
+      maxPot = Math.max(maxPot, r.potential);
+    }
+    ok(maxOvr <= 80 && maxPot <= 8, `新秀 ovr≤80 潜力星级≤8（实测 ${maxOvr}/${maxPot}）`);
+    const dc = genDraftClass(mulberry32(seed + 556));
+    ok(dc.length === 80, `选秀大会 80 人（${dc.length}）`);
+    const over80 = dc.filter((p) => p.ovr >= 80);
+    ok(over80.length === 1 && over80[0].ovr <= 83, `恰好 1 名总评 ≥80 且 ≤83（${over80[0]?.name} ${over80[0]?.ovr} @第${dc.indexOf(over80[0]) + 1}顺位）`);
+    ok(dc.filter((p) => p.ovr < 80).length === 79, '其余 79 人 <80');
+    const nations = new Map<string, number>();
+    for (const p of dc) nations.set(p.nation, (nations.get(p.nation) ?? 0) + 1);
+    ok(nations.get('美国') === 56 && nations.get('中国') === 4, `国籍分布 美 70%/中 5%（${nations.get('美国')}/${nations.get('中国')}）`);
+    const usNames = dc.filter((p) => p.nation === '美国').map((p) => p.name);
+    const cnNames = dc.filter((p) => p.nation === '中国').map((p) => p.name);
+    ok(usNames.every((n) => /^[A-Za-z][A-Za-z. ]+$/.test(n)), '美国新秀用英文名（不再中文名标"美国"）');
+    ok(cnNames.every((n) => /[\u4e00-\u9fff]/.test(n)), '中国新秀用中文名');
+    ok(new Set(dc.map((p) => p.name)).size === 80, '80 人名字无重复');
+    ok(dc.every((p) => p.secPos === POS_SEC[p.pos]), '新秀双位置齐全');
+    // v2.1 自由市场生成均匀 55-80
+    const rngF = mulberry32(seed + 557);
+    let fMin = 99, fMax = 0;
+    for (let i = 0; i < 400; i++) {
+      const fa = genFreeAgent(rngF);
+      fMin = Math.min(fMin, fa.ovr);
+      fMax = Math.max(fMax, fa.ovr);
+    }
+    ok(fMin >= 54 && fMax <= 81 && fMax - fMin >= 20, `自由球员均匀 55-80（实测 ${fMin}-${fMax}）`);
+  }
+  {
+    // v1.4 总评算法：18 项均值 + 长处补偿（依据用户提供的 2K 截图样本校准）
+    const S = (vals: number[]) => {
+      const s = {} as Record<(typeof SKILL_KEYS)[number], number>;
+      SKILL_KEYS.forEach((k, i) => { s[k] = vals[i]; });
+      return s;
+    };
+    const daniels = S([62, 18, 55, 60, 65, 75, 72, 70, 92, 35, 95, 30, 82, 45, 62, 85, 55, 72]);   // 官方 82
+    const egb = S([80, 65, 61, 55, 72, 55, 74, 76, 70, 84, 64, 85, 82, 82, 73, 73, 84, 76]);      // 官方 75
+    const okongwu = S([84, 62, 78, 55, 76, 55, 72, 70, 74, 81, 67, 76, 79, 78, 79, 68, 74, 78]); // 官方 81
+    const jjohnson = S([82, 72, 68, 72, 68, 68, 72, 70, 72, 68, 58, 52, 78, 68, 85, 85, 82, 95]);// 官方 84
+    const naw = S([52, 21, 89, 77, 77, 87, 79, 75, 95, 36, 81, 23, 82, 24, 42, 91, 50, 75]);     // 官方 81
+    console.log('  算法总评对照（2K 官方 82/75/81/84/81）:',
+      calcOvr(daniels), calcOvr(egb), calcOvr(okongwu), calcOvr(jjohnson), calcOvr(naw));
+    ok(calcOvr(daniels) >= 77 && calcOvr(daniels) <= 82, `长处补偿拉高均值（丹尼尔斯 均值62.8 → ${calcOvr(daniels)}）`);
+    ok(calcOvr(naw) >= 78 && calcOvr(naw) <= 84, `极端长处补足短板（沃克 均值64.2 → ${calcOvr(naw)}）`);
+    ok(calcOvr(jjohnson) >= 80 && calcOvr(okongwu) >= 76, '均衡强队总评贴近均值+补偿');
+    // 补偿单调：同均值（65）下 3 项长处越多总评越高
+    const flat = S(Array(18).fill(65));
+    const spike = S([95, 92, 85, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55, 55]);
+    ok(calcOvr(spike) > calcOvr(flat), `长处弥补短板（扁平 ${calcOvr(flat)} → 长处 ${calcOvr(spike)}）`);
+    ok(calcOvr(flat) === 65, '无长处时总评=均值');
+    // 虚构生成：总评≈target（±4），技能均值低于总评（2K 式分布）
+    let worst = 0;
+    let meanBelow = 0;
+    const rngT = mulberry32(seed + 777);
+    for (let i = 0; i < 500; i++) {
+      const t = 55 + (i % 36);
+      const sk = genSkills(rngT, ['PG', 'SG', 'SF', 'PF', 'C'][i % 5] as import('./types').Pos, t);
+      const o = calcOvr(sk);
+      worst = Math.max(worst, Math.abs(o - t));
+      const avg = SKILL_KEYS.reduce((s, k) => s + sk[k], 0) / SKILL_KEYS.length;
+      if (avg < o) meanBelow++;
+    }
+    ok(worst <= 4, `虚构技能生成总评≈目标（最大偏差 ${worst}）`);
+    ok(meanBelow >= 460, `技能均值低于总评（均值<总评 ${meanBelow}/500，2K 式分布）`);
+  }
+
+  console.log('== 单场模拟（不累计赛季统计）==');
+  const g1 = simulateGame(l.teams[0], l.teams[1], mulberry32(7), false);
+  const s1 = g1.result;
+  console.log(`场1: ${l.teams[0].abbr} ${s1.awayScore} - ${s1.homeScore} ${l.teams[1].abbr} (OTx${g1.otCount})`);
+  ok(l.teams[0].players.every((p) => p.gp === 0), '冒烟比赛不累计常规统计');
+
+  simSeason(l, '虚构名单');
+  console.log('得分王:', leaders(l, 'pts')[0]?.player.name, leaders(l, 'pts')[0]?.value.toFixed(1));
+
+  const champ = fullPlayoffs(l);
+  console.log('== 季后赛 == 总冠军:', champ >= 0 ? l.teams[champ].abbr : '无');
+  ok(champ >= 0, '冠军产生');
+
+  {
+    // v2.1 提前晋级：第一轮部分系列完成后即可建下一轮（已晋级 vs 待定），随打随填
+    const pl = createLeague(seed + 9001);
+    while (pl.day < pl.totalDays) simDay(pl);
+    runPlayoffRound(pl, 0);
+    // 只打完第一个系列（4 胜）
+    const s0 = pl.playoffRounds[0].series[0];
+    let g0 = 0;
+    while (s0.awayWins < 4 && s0.homeWins < 4 && g0++ < 60) simPlayoffGame(pl, 0, 0);
+    ok(s0.awayWins >= 4 || s0.homeWins >= 4, '第一个系列已打完');
+    // 提前建下一轮（此时轮次其他系列未完）
+    runPlayoffRound(pl, 1);
+    const half0 = pl.playoffRounds[1].series[0];
+    const half1 = pl.playoffRounds[1].series[1];
+    ok(half0.awayId >= 0 || half0.homeId >= 0 || half1.awayId >= 0 || half1.homeId >= 0, '提前建轮：半决赛已有已定方/占位（不依赖整轮完成）');
+    // 打完第一轮剩余系列 → 占位自动填实
+    for (let i = 1; i < 8; i++) {
+      const s = pl.playoffRounds[0].series[i];
+      let g = 0;
+      while (s.awayWins < 4 && s.homeWins < 4 && g++ < 60) simPlayoffGame(pl, 0, i);
+    }
+    refreshPlayoffPlaceholders(pl);
+    ok(pl.playoffRounds[1].series.every((s) => s.awayId >= 0 && s.homeId >= 0), '第一轮打完后半决赛全部填充为实对位');
+  }
+
+  console.log('== 赛季奖项 + 休赛期（虚构）==');
+  runOffseasonFlow(l, '虚构', true);
+
+  console.log('== 交易评估（v3 价值模型 + 首轮签）==');
+  l.userTeamId = 0;
+  const me = l.teams[0];
+  // 估值自洽：22 岁潜力小将 ≈ 32 岁老将（确定性构造，避免随机抽样波动）
+  const young = { ...me.players[0], ovr: 72, potential: 10, age: 22, salary: 480, contractYears: 3 } as unknown as Player;
+  const old = { ...me.players[0], ovr: 85, potential: 5, age: 32, salary: 2100, contractYears: 2 } as unknown as Player;
+  if (young && old) {
+    console.log(`  young ${young.name} o${young.ovr} p${young.potential}星 a${young.age} → 估值对比老将 ${old.ovr} a${old.age}`);
+    ok(young.age <= 25 && young.potential >= 8, '潜力小将特征');
+    const yv = tradeValue(young), ov = tradeValue(old);
+    console.log(`    young 估值 ${yv} vs 老将估值 ${ov}`);
+    // 指数语义：老将（即战力）与潜力小将价值应同量级（0.2-5 倍误差内），体现"价值对等"
+    ok(yv / ov > 0.2 && yv / ov < 5, `潜力与即战力价值对等（young/old=${(yv / ov).toFixed(2)}）`);
+    // 指数基准：75 能力=1.0、每 +10 翻倍 → 直接用 tradeValue 换算回等效能力检查单调性
+    const basePlayer = { ...young, ovr: 75, potential: 5, age: 27, salary: 0, contractYears: 0 } as unknown as Player;
+    const base = tradeValue(basePlayer as Player);
+    ok(Math.abs(base - 1) < 0.01, `75 能力基线估值≈1（实际 ${base}）`);
+  }
+  // 指数单调性：高 OVR 同条件估值必须严格更高（75→85→95 约 1→2→4）
+  {
+    const mk = (ovr: number) => ({ ...me.players[0], ovr, potential: 5, age: 28, salary: 0, contractYears: 0 }) as unknown as Player;
+    const v75 = tradeValue(mk(75) as Player), v85 = tradeValue(mk(85) as Player), v95 = tradeValue(mk(95) as Player);
+    console.log(`  指数单调: 75→${v75} / 85→${v85} / 95→${v95}`);
+    ok(v85 > v75 * 1.7 && v95 > v85 * 1.7, '每 +10 能力估值大致翻倍');
+  }
+  const v = evaluateTrade(l, me.id, 1, [], [], [], []);
+  console.log('  空筹码评估:', JSON.stringify(v));
+  ok(!v.accept, '空筹码被拒');
+  // 首轮签估值与转移
+  const pk0 = l.draftPool[0];
+  ok(pk0.o === 0, '首轮签默认归己队');
+  const pv = pickValue(l, pk0);
+  console.log(`  我的首轮签估值 ${pv}（${l.teams[pk0.f].abbr} 战绩 ${l.teams[pk0.f].win}-${l.teams[pk0.f].loss}）`);
+  ok(pv >= 0.4 && pv <= 5.5, '签估值在合理区间（指数尺度）');
+  // 用一名球员 + 签换对方球员（对方第 15 人）——只验证规则通道可用（不要求成交）
+  const myGuy = [...me.players].sort((a, b) => b.ovr - a.ovr)[6];
+  const target15 = [...l.teams[1].players].sort((a, b) => a.ovr - b.ovr)[0];
+  const v2 = evaluateTrade(l, me.id, 1, [myGuy.id], [target15.id], [0], []);
+  console.log('  球员+首轮签 换 角色球员:', JSON.stringify(v2));
+  ok(v2.reason.length > 0, '带签交易可评估');
+  // apron 硬顶/税线约束应能进入 reason（队 0 若超税线会有对应文案；不强制 accept）
+  ok(v2.reason.includes('估值'), 'reason 含估值明细');
+
+  console.log('== 自定义轮换冒烟（v0.3.1）==');
+  const ml = createLeague(seed + 77);
+  const mt = ml.teams[0];
+  const mPG = [...mt.players].find((p) => p.pos === 'PG')!;
+  const mPG2 = [...mt.players].filter((p) => p.pos === 'PG')[1];
+  const mPG3 = [...mt.players].filter((p) => p.pos === 'PG')[2];
+  mPG.min = 20;
+  mPG2.min = 16;
+  mPG3.min = 12; // 合计 48
+  mt.initiator = 'C';
+  const mc = [...mt.players].find((p) => p.pos === 'C')!;
+  mc.usage = 10;
+  const mg = simulateGame(mt, ml.teams[1], mulberry32(3));
+  const line = mg.result.awayBox ?? [];
+  const findMin = (pid: number) => line.find((b) => b.pid === pid)?.min ?? 0;
+  ok(mPG.gp === 1 && mPG.starts === 1, `手动轮换：PG 首发上场（gp=${mPG.gp}）`);
+  console.log(`  手动 PG 轮换分钟: ${mPG.name} ${findMin(mPG.id)} / ${mPG2.name} ${findMin(mPG2.id)} / ${mPG3.name} ${findMin(mPG3.id)}（目标 20/16/12）`);
+  ok(findMin(mPG.id) + findMin(mPG2.id) + findMin(mPG3.id) >= 44, '手动轮换分钟总量合理');
+  ok(mc.gp === 1, '自定义球权中锋仍出场');
+  for (const p of mt.players) { p.min = null; p.usage = null; }
+  mt.initiator = 'PG';
+  // 恢复自动后：同 seed 两次自动模拟应完全一致（确定性复现；自定义开关只在置位时生效）
+  // v0.3.7：伤病由独立 injurySeed 判定，清空双方伤病后两场结果一致
+  const clearInj = () => { for (const t of ml.teams) for (const p of t.players) p.injury = null; };
+  clearInj();
+  const backAuto = simulateGame(mt, ml.teams[1], mulberry32(3), true, 0);
+  clearInj();
+  const backAuto2 = simulateGame(mt, ml.teams[1], mulberry32(3), true, 0);
+  ok(backAuto.result.awayScore === backAuto2.result.awayScore && backAuto.result.homeScore === backAuto2.result.homeScore, '自动轮换路径确定性（自定义清除后与 v0.3 行为一致）');
+
+  console.log('== v0.3.7 伤病系统冒烟 ==');
+  {
+    // 1) 伤停期间不出场：gp 不增，场次递减，归零复出
+    const il = createLeague(seed + 404);
+    const injured = il.teams[0].players[0];
+    injured.injury = { type: '肌肉拉伤', games: 2 };
+    const gpBefore = injured.gp;
+    const gA = simulateGame(il.teams[0], il.teams[1], mulberry32(11), true, 7);
+    ok(injured.gp === gpBefore, `伤停第 1 场不出场（gp ${gpBefore}→${injured.gp}）`);
+    ok(injured.injury!.games === 1, `伤停场次递减（2→${injured.injury!.games}）`);
+    const gB = simulateGame(il.teams[0], il.teams[1], mulberry32(12), true, 8);
+    ok(injured.injury === null, '伤停归零复出');
+    ok(injured.gp === gpBefore + 1, `复出后正常出场（gp=${injured.gp}）`);
+    ok(gA.injuries.length === 0 || gB.injuries.length === 0, '伤病事件数组结构可用');
+    // 2) 大量比赛产生伤病事件；耐久高者显著更少
+    const rl2 = createLeague(seed + 505);
+    const hiT = rl2.teams[0];
+    const loT = rl2.teams[1];
+    for (const p of hiT.players) p.body.durability = 96;
+    for (const p of loT.players) p.body.durability = 45;
+    let hi = 0, lo = 0;
+    for (let i = 0; i < 200; i++) {
+      const gi = simulateGame(hiT, loT, mulberry32(1000 + i), false, 5000 + i);
+      hi += gi.injuries.filter((x) => x.tid === hiT.id).length;
+      lo += gi.injuries.filter((x) => x.tid === loT.id).length;
+      for (const t of rl2.teams) for (const p of t.players) p.injury = null; // 每场清空，统计独立事件
+    }
+    console.log(`  200 场冒烟：高耐久伤停 ${hi} 起 vs 低耐久 ${lo} 起`);
+    ok(hi + lo >= 2, `真实伤病事件发生（${hi + lo} 起）`);
+    ok(hi <= lo, `高耐久伤停不高于低耐久（${hi} ≤ ${lo}）`);
+  }
+
+  console.log('== v0.3.7 位置换位（v2.0 双位置：只能在主/副位间互换，不交换他人）==');
+  {
+    const pl = createLeague(seed + 606);
+    const t1 = pl.teams[0];
+    const pg = [...t1.players].find((p) => p.pos === 'PG')!;
+    const pgOvrBefore = pg.ovr;
+    const sec = pg.secPos; // PG 的副位 = SG
+    ok(sec === 'SG', 'PG 默认副位 SG（相邻位置）');
+    // 合法：PG → SG（主副互换）
+    const res = repositionPlayer(t1, pg.id, 'SG');
+    ok(res.moved.id === pg.id && pg.pos === 'SG' && pg.secPos === 'PG', '拖到副位：主副互换成功');
+    ok(res.swapped == null, '双位置规则：不与其他球员交换');
+    ok(pg.ovr !== pgOvrBefore, `换位后 OVR 适配变化（${pgOvrBefore}→${pg.ovr}）`);
+    const posSet = new Set(t1.players.map((p) => p.pos));
+    ok(posSet.size === 5, '换位后五位置仍齐全');
+    // 非法：拖到第三位置（C）应拒绝
+    let threw = false;
+    try { repositionPlayer(t1, pg.id, 'C'); } catch { threw = true; }
+    ok(threw, '只能拖到 {主,副} 两个位置（C 被拒）');
+    // 幂等：换回原位置精确还原
+    repositionPlayer(t1, pg.id, 'PG');
+    ok(pg.pos === 'PG' && pg.ovr === pgOvrBefore, `换回原位置 OVR 精确还原（应 ${pgOvrBefore}）`);
+    // 再反复换：数值稳定
+    repositionPlayer(t1, pg.id, 'SG');
+    const ovrAfter = pg.ovr;
+    repositionPlayer(t1, pg.id, 'PG');
+    repositionPlayer(t1, pg.id, 'SG');
+    ok(pg.ovr === ovrAfter, '反复换位数值稳定（幂等）');
+    ok(bodyKeys().every((k) => typeof pg.body[k] === 'number' && pg.body[k] >= 25 && pg.body[k] <= 99), '身体属性字段完整（25-99）');
+  }
+
+  console.log('== v2.2 球权分配（前场 SF/PF/C 更多 · 能力球员更多）==');
+  {
+    const pl = createLeague(seed + 2022);
+    const tA = pl.teams[0];
+    const g = simulateGame(tA, pl.teams[1], mulberry32(21), true, 99);
+    const box = g.result.awayBox ?? [];
+    const fgaOf = (pos: string) => box
+      .filter((b) => tA.players.find((p) => p.id === b.pid)?.pos === pos)
+      .reduce((s, b) => s + b.fga, 0);
+    const front = fgaOf('SF') + fgaOf('PF') + fgaOf('C');
+    const back = fgaOf('PG') + fgaOf('SG');
+    console.log(`  前场出手 ${front} vs 后场 ${back}；队内最强出手 vs 平均`);
+    ok(front > back, `前场（SF/PF/C）出手多于后场（${front} vs ${back}）`);
+    const played = box.filter((b) => b.min > 0);
+    const topPlayed = [...played].sort((a, b) => {
+      const pa = tA.players.find((p) => p.id === a.pid)!;
+      const pb = tA.players.find((p) => p.id === b.pid)!;
+      return pb.ovr - pa.ovr;
+    })[0];
+    const avg = played.reduce((s, b) => s + b.fga, 0) / Math.max(1, played.length);
+    ok(!!topPlayed && topPlayed.fga >= avg * 0.85, `出场最强球员出手不低于平均 85%（${topPlayed?.fga} vs ${avg.toFixed(1)}）`);
+  }
+
+  console.log('== 战力模型 ==');
+  const sA = teamStrength(l.teams[0].players);
+  const sB = teamStrength(l.teams[1].players);
+  ok(sA > 0 && sB > 0, `teamStrength 可用 ${sA} / ${sB}`);
+
+  console.log('== 存档迁移 v1→v9 ==');
+  const oldClone = JSON.parse(JSON.stringify(l)) as LeagueState;
+  delete (oldClone as unknown as Record<string, unknown>).mode;
+  delete (oldClone as unknown as Record<string, unknown>).freeAgents;
+  delete (oldClone as unknown as Record<string, unknown>).draftPool;
+  delete (oldClone as unknown as Record<string, unknown>).cultureId;
+  delete (oldClone as unknown as Record<string, unknown>).faDay;
+  delete (oldClone as unknown as Record<string, unknown>).faOffers;
+  delete (oldClone as unknown as Record<string, unknown>).poffExitShown;
+  delete (oldClone as unknown as Record<string, unknown>).pendingEvents;
+  delete (oldClone as unknown as Record<string, unknown>).draft;
+  for (const t of oldClone.teams) {
+    delete (t as unknown as Record<string, unknown>).initiator;
+    delete (t as unknown as Record<string, unknown>).chemistry;
+    delete (t as unknown as Record<string, unknown>).discipline;
+    delete (t as unknown as Record<string, unknown>).brand;
+    delete (t as unknown as Record<string, unknown>).fans;
+    delete (t as unknown as Record<string, unknown>).style;
+    delete (t as unknown as Record<string, unknown>).coachStyle;
+    for (const p of t.players) {
+      delete (p as unknown as Record<string, unknown>).exp;
+      delete (p as unknown as Record<string, unknown>).min;
+      delete (p as unknown as Record<string, unknown>).usage;
+      delete (p as unknown as Record<string, unknown>).basePos;
+      delete (p as unknown as Record<string, unknown>).baseAttrs;
+      delete (p as unknown as Record<string, unknown>).baseOvr;
+      delete (p as unknown as Record<string, unknown>).grow;
+      delete (p as unknown as Record<string, unknown>).tags;
+      delete (p as unknown as Record<string, unknown>).secPos;
+      delete (p as unknown as Record<string, unknown>).baseSkills;
+      delete (p as unknown as Record<string, unknown>).points;
+      delete (p as unknown as Record<string, unknown>).career;
+      delete (p as unknown as Record<string, unknown>).nation;
+      delete (p as unknown as Record<string, unknown>).potential;
+    }
+  }
+  const nameBefore = oldClone.teams[0].players[0].name;
+  migrateSave(oldClone);
+  ok(oldClone.mode === 'fictional', '旧档模式识别为虚构');
+  ok(oldClone.freeAgents.length >= 50, `老档迁移自动补建初始自由市场（${oldClone.freeAgents.length} 人）`);
+  ok(oldClone.teams[0].players.every((p) => p.exp > 0), 'exp 回填');
+  ok(oldClone.teams[0].players.every((p) => p.min === null && p.usage === null), 'min/usage 回填 null（自动）');
+  ok(oldClone.teams.every((t) => t.initiator === 'PG'), 'initiator 回填 PG');
+  ok(oldClone.draftPool.length === 30, 'draftPool 回填 30 枚');
+  ok(oldClone.teams[0].players[0].name === nameBefore, '虚构档名字不翻译（保持原样）');
+  ok(oldClone.teams[0].players.every((p) => p.body && bodyKeys().every((k) => p.body[k] >= 25 && p.body[k] <= 99)), 'migrate 补身体属性（v4）');
+  ok(oldClone.teams[0].players.every((p) => p.injury === null), 'migrate 补 injury=null（v4）');
+  ok(oldClone.teams[0].players.every((p) => p.face === undefined), '虚构档不补头像（v4）');
+  ok(oldClone.teams[0].players.every((p) => p.basePos === p.pos && p.baseAttrs && p.baseOvr === p.ovr), 'migrate 补位置基准（v5，以当前值为基准）');
+  ok(oldClone.teams.every((t) => t.chemistry === 50 && t.discipline === 50 && t.brand === 50 && t.fans === 100), 'migrate 补球队气质（v6 中性默认）');
+  ok(oldClone.teams[0].players.every((p) => p.grow === 1), 'migrate 补 grow=1（v6）');
+  ok(oldClone.cultureId === null, 'migrate 补 cultureId=null（v6）');
+  ok(oldClone.teams.every((t) => (t.style === null || ['youth', 'star'].includes(t.style as string)) && (t.coachStyle === null || ['iron', 'locker', 'brand'].includes(t.coachStyle as string))), 'migrate 补球队/执教风格拆分（v7/v9）');
+  ok(oldClone.teams[0].players.every((p) => Array.isArray(p.tags)), 'migrate 补标签数组（v7）');
+  ok(oldClone.teams[0].players.some((p) => p.ovr >= 80 && p.tags.length >= 1), 'migrate 标签规则：80+ 至少 1 个标签（v7）');
+  // v9：双位置 / 潜力星 / 技能基准 / 加点 / 生涯 / 国籍 / 执教风格 / FA 7 天 / 待处理事件
+  ok(oldClone.teams[0].players.every((p) => p.secPos && ['PG', 'SG', 'SF', 'PF', 'C'].includes(p.secPos)), 'migrate 补双位置（v9）');
+  ok(oldClone.teams[0].players.every((p) => p.potential >= 1 && p.potential <= 10), 'migrate 潜力换算 1-10 星（v9）');
+  ok(oldClone.teams[0].players.every((p) => p.baseSkills && typeof p.baseSkills.three === 'number'), 'migrate 补技能基准 baseSkills（v9）');
+  ok(oldClone.teams[0].players.every((p) => p.points === 0 && p.career && p.nation === '美国'), 'migrate 补 points/career/nation（v9）');
+  ok(oldClone.teams.every((t) => t.coachStyle === null || ['iron', 'locker', 'brand'].includes(t.coachStyle)), 'migrate 补执教风格（v9）');
+  ok(oldClone.faDay === 1 && oldClone.faOffers.length === 0 && oldClone.poffExitShown === false, 'migrate 补 FA 7 天/淘汰弹窗字段（v9）');
+  ok(Array.isArray(oldClone.pendingEvents), 'migrate 补 pendingEvents（v9）');
+  ok(oldClone.draft === null, 'migrate 补 draft=null（v10）');
+  if (oldClone.awards) ok(Array.isArray(oldClone.awards.allDefense) && oldClone.awards.allDefense.length === 2, 'migrate 补 allDefense（v9）');
+
+  console.log('== 赛程空洞推进 + 赛季中自由签约（v0.3.3）==');
+  // —— 空洞天：清空第 5 天的赛程 → simDay 照常推进，快进不卡死 ——
+  const hle = createLeague(seed + 888);
+  hle.schedule[4] = [];
+  while (hle.day < 4) simDay(hle);
+  const holeRep = simDay(hle);
+  ok(!!holeRep && holeRep.day === 5 && holeRep.games.length === 0, '空洞天照常推进（不卡死）');
+  const afterHole = simDay(hle);
+  ok(!!afterHole && afterHole.day === 6, '空洞后继续正常比赛日');
+  const mn = nextGameOf(hle, 0);
+  ok(!mn || mn.day > hle.day, 'nextGameOf 只指向未来比赛');
+  while (hle.day < hle.totalDays) simDay(hle);
+  ok(hle.day === hle.totalDays, '含空洞的赛程可一路快进到底');
+  // —— v0.3.4 防重复保险丝：同一天已打完 → 再模拟应跳过而非重打 ——
+  const fuse = createLeague(seed + 7777);
+  const fuseDay0 = fuse.day;
+  const r1 = simDay(fuse);
+  ok(r1 !== null && fuse.day === fuseDay0 + 1 && fuse.results.length > 0, '保险丝：正常模拟一天');
+  const n1 = fuse.results.length;
+  fuse.day--; // 模拟外部污染：日期回卷 1 天
+  const r2 = simDay(fuse);
+  ok(r2 !== null && r2.games.length === 0 && fuse.results.length === n1 && fuse.day === fuseDay0 + 1, '保险丝：同一天不重复模拟（results 不增）');
+  // —— 赛季中自由签约（虚构 l：已进第二季、15 人名单、市场就绪）——
+  const me2 = l.teams[0];
+  const pay = payrollOf(me2.players);
+  console.log(`  我的工资单 ${pay}万（帽 ${SALARY_CAP}万 / 税线 ${TAX_LINE}万）`);
+  const beforePool = l.freeAgents.length;
+  const askHigh = [...l.freeAgents].sort((a, b) => askFor(b) - askFor(a))[0];
+  if (askHigh && askFor(askHigh) > 500) {
+    const rLow = signFreeAgentNow(l, 0, askHigh.id, 2, 250);
+    ok(!rLow.ok && rLow.note.includes('低于'), `报价过低被拒（${rLow.note}）`);
+  } else {
+    console.log('  （市场无人要价 >500，跳过报价过低断言）');
+  }
+  const cheap = [...l.freeAgents].sort((a, b) => askFor(a) - askFor(b))[0];
+  const rCheap = signFreeAgentNow(l, 0, cheap.id, 2, Math.max(300, askFor(cheap)));
+  ok(rCheap.ok, `底薪通道即时签约成交（${rCheap.note}）`);
+  ok(me2.players.length === 16, `签后名单 16 人（≤17，实际 ${me2.players.length}）`);
+  // 中产通道：仅当工资单在帽上-税线区间才存在（帽下自由签、超税线无中产）
+  const midCandidates = [...l.freeAgents].filter((p) => askFor(p) > 500 && askFor(p) <= 1500);
+  if (pay > SALARY_CAP && pay < TAX_LINE && midCandidates.length >= 2) {
+    const a1 = signFreeAgentNow(l, 0, midCandidates[0].id, 1, askFor(midCandidates[0]));
+    const a2 = signFreeAgentNow(l, 0, midCandidates[1].id, 1, askFor(midCandidates[1]));
+    ok(a1.ok && l.midUsed[0], `中产特例可用并占用（${a1.note}）`);
+    ok(!a2.ok, `中产特例每赛季 1 次：再次使用被拒（${a2.note}）`);
+  } else if (pay <= SALARY_CAP) {
+    const free1 = midCandidates[0] ?? askHigh;
+    if (free1 && free1.id !== cheap.id) {
+      const rFree = signFreeAgentNow(l, 0, free1.id, 1, askFor(free1));
+      ok(rFree.ok, `帽下空间队自由签约任意价位（${rFree.note}）`);
+    }
+  } else {
+    console.log('  （超税线：只有底薪通道，跳过中产断言）');
+  }
+  // 名单补满到 17 后：再签被拒
+  const cheapish = [...l.freeAgents].sort((a, b) => askFor(a) - askFor(b));
+  while (me2.players.length < ROSTER_MAX && cheapish.length) {
+    const m = cheapish.shift()!;
+    const rr = signFreeAgentNow(l, 0, m.id, 1, 300);
+    if (!rr.ok) break;
+  }
+  ok(me2.players.length <= ROSTER_MAX, `名单不超过 ${ROSTER_MAX}（实际 ${me2.players.length}）`);
+  if (me2.players.length >= ROSTER_MAX) {
+    const over = cheapish.find((p) => askFor(p) <= 352);
+    if (over) {
+      const rr2 = signFreeAgentNow(l, 0, over.id, 1, 300);
+      ok(!rr2.ok && rr2.note.includes('已满'), `名单满 ${ROSTER_MAX} 时拒绝签约（${rr2.note}）`);
+    }
+  }
+  ok(l.freeAgents.length < beforePool, `市场人数随签约减少（${beforePool} → ${l.freeAgents.length}）`);
+
+  console.log(`== 全部通过 ==（失败数 ${fails}）`);
+  if (fails > 0) process.exit(1);
+}
+
+// ---------- 真实名单（2K27 评分 · 2026-27 阵容）专项验证 ----------
+function findPlayer(l: LeagueState, name: string) {
+  for (const t of l.teams) {
+    const p = t.players.find((x) => x.name === name);
+    if (p) return { p, abbr: t.abbr };
+  }
+  return null;
+}
+
+function runReal(): void {
+  const seed = Number(process.env.TEST_SEED || 20250906);
+  console.log('\n== 真实名单联赛（2026-27 赛季 · 2K27 评分 · 中文名）==');
+  const l = createRealLeague(seed);
+  checkRoster(l, '真实初始');
+  ok(l.freeAgents.length >= 110, `真实开档即有自由市场（${l.freeAgents.length} 人）`);
+  ok(l.freeAgents.some((p) => p.name === '约纳斯·瓦兰丘纳斯'), '真实市场含瓦兰丘纳斯');
+  ok(l.freeAgents.some((p) => p.name === '布鲁斯·布朗'), '真实市场含布鲁斯·布朗');
+  console.log('球员总数', l.teams.reduce((s, t) => s + t.players.length, 0), '；年份', l.year, '；模式', l.mode);
+  const checks: [string, (o: number, a: number) => boolean][] = [
+    ['尼古拉·约基奇', (o) => o >= 95],
+    ['维克托·文班亚马', (o) => o >= 95],
+    ['杰森·塔图姆', (o) => o >= 90],
+    ['勒布朗·詹姆斯', (_o, a) => a >= 34],
+    ['斯蒂芬·库里', (o) => o >= 90],
+    ['库珀·弗拉格', (_o, a) => a <= 21],
+    ['杨瀚森', (_o, a) => a >= 18],
+    ['八村塁', (_o, a) => a >= 18],
+  ];
+  for (const [n, cond] of checks) {
+    const hit = findPlayer(l, n);
+    console.log(`  ${hit ? '✓' : '✗ 缺'} ${n}: ${hit ? `${hit.p.pos} o${hit.p.ovr} a${hit.p.age}岁 e${hit.p.exp} ${hit.abbr}` : ''}${hit && !cond(hit.p.ovr, hit.p.age) ? ' ← 数值可疑' : ''}`);
+    if (hit) ok(cond(hit.p.ovr, hit.p.age), `${n} 数值区间`);
+  }
+  // 中文名应已内置（保留"OG/V.J."这类常见字母缩写前缀是正常的）
+  const noZh = [...l.teams.flatMap((t) => t.players)].filter((p) => !/[\u4e00-\u9fff]/.test(p.name));
+  ok(noZh.length === 0, `真实名单球员名均含中文（异常 ${noZh.length}: ${noZh.slice(0, 3).map((p) => p.name).join('/')}）`);
+  // 旧档改名迁移：英文名 → 中文
+  const clone = JSON.parse(JSON.stringify(l)) as LeagueState;
+  const en1 = clone.teams[0].players.find((p) => p.name === '杰森·塔图姆') ?? clone.teams[0].players[0];
+  en1.name = 'Jayson Tatum';
+  delete (clone as unknown as Record<string, unknown>).draftPool;
+  delete (clone as unknown as Record<string, unknown>).awards;
+  // v1.4 旧档无 18 项技能 → migrate 按中文名从 2K 数据重建
+  delete (en1 as Partial<Player>).skills;
+  migrateSave(clone);
+  ok(clone.teams[0].players.some((p) => p.name === '杰森·塔图姆'), 'migrate 将英文名还原为中文');
+  ok(clone.teams[0].players.every((p) => p.skills), 'migrate 补 18 项技能（真实球员按中文名重建）');
+  ok(clone.draftPool.length === 30, 'migrate 补 draftPool');
+  ok(clone.teams[0].players.every((p) => p.min === null && p.usage === null), 'migrate 补 min/usage 默认值');
+  ok(clone.teams[0].initiator === 'PG', 'migrate 补 initiator');
+  const all = [...l.teams.flatMap((t) => t.players)];
+  const withFace = all.filter((p) => p.face).length;
+  console.log(`真实球员大头照 ${withFace}/${all.length}（无头像用队徽占位）`);
+  ok(withFace > 440, `30队出战球员全有真实照片（${withFace}/${all.length}）`);
+  ok(all.every((p) => p.body && bodyKeys().every((k) => p.body[k] >= 25 && p.body[k] <= 99)), '真实球员身体属性完整（25-99）');
+  ok(all.every((p) => p.skills && SKILL_KEYS.every((k) => p.skills[k] >= 25 && p.skills[k] <= 99)), '真实球员 18 项技能完整（25-99）');
+  ok(all.every((p) => p.potential >= 1 && p.potential <= 10), '真实球员潜力 1-10 星');
+  ok(all.every((p) => p.secPos && ['PG', 'SG', 'SF', 'PF', 'C'].includes(p.secPos)), '真实球员双位置字段');
+  ok(all.every((p) => p.career && typeof p.nation === 'string'), '真实球员生涯/国籍字段');
+  const jt = findPlayer(l, '杰森·塔图姆')?.p;
+  if (jt) console.log(`  塔图姆技能：三分 ${jt.skills.three} · 篮下 ${jt.skills.layup} · 防守板 ${jt.skills.dr} · 弹性 ${jt.skills.vertical} · 均值/算法总评/官方 ${Math.round(SKILL_KEYS.reduce((s, k) => s + jt.skills[k], 0) / 18)}/${calcOvr(jt.skills)}/${jt.ovr}`);
+  ok(all.every((p) => p.injury === null), '新档伤病初始为空');
+  const top5 = [...all].sort((a, b) => b.ovr - a.ovr).slice(0, 5);
+  console.log('联盟前五:', top5.map((p) => `${p.name} ${p.ovr}`).join(' / '));
+  console.log('OVR≥90:', all.filter((p) => p.ovr >= 90).length, '人；≥85:', all.filter((p) => p.ovr >= 85).length, '人；35岁+:', all.filter((p) => p.age >= 35).length, '人');
+
+  simSeason(l, '真实名单');
+  console.log('得分王:', leaders(l, 'pts')[0]?.player.name, leaders(l, 'pts')[0]?.value.toFixed(1),
+    '| 篮板王:', leaders(l, 'reb')[0]?.player.name, leaders(l, 'reb')[0]?.value.toFixed(1));
+
+  const champ = fullPlayoffs(l);
+  console.log('== 总冠军:', champ >= 0 ? l.teams[champ].abbr : '无');
+
+  console.log('== 赛季奖项 + 休赛期（真实名单）==');
+  ok(l.finalsAccum.length > 0, '总决赛战报已累计');
+  runOffseasonFlow(l, '真实', true);
+  // 真实模式首个休赛期池应含 2K 自由球员
+  const faReal = l.freeAgents.filter((p) => p.name === '约纳斯·瓦兰丘纳斯' || p.name === '布鲁斯·布朗');
+  ok(l.mode === 'real', '真实模式');
+  ok(l.season >= 2, '进入第二季');
+  const all2 = [...l.teams.flatMap((t) => t.players)];
+  console.log('次季球员数', all2.length, '；35岁+', all2.filter((p) => p.age >= 35).length, '人；fa 真实残余:', faReal.map((p) => p.name).join('/') || '已签或退役');
+  console.log(`== 全部通过 ==（失败数 ${fails}）`);
+  if (fails > 0) process.exit(1);
+}
+
+run();
+runReal();

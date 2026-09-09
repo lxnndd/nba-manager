@@ -1,0 +1,17 @@
+# 依赖与构建产物
+node_modules/
+dist/
+release/
+*.log
+
+# 临时/调试脚本
+tools/.selfTest.cjs
+tools/.tmp.cjs
+tools/temp-*.mjs
+tools/temp-*.ts
+.test-out/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini

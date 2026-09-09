@@ -1,0 +1,66 @@
+{
+  "name": "nba-manager",
+  "productName": "NBA经理",
+  "version": "2.2.1",
+  "private": true,
+  "description": "单机 NBA 球队经理游戏",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "dist": "npm run build && electron-builder --win portable && node tools/prune-old-releases.mjs",
+    "dist:dir": "npm run build && electron-builder --win dir",
+    "prune": "node tools/prune-old-releases.mjs"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.0"
+  },
+  "build": {
+    "appId": "com.local.nbamanager",
+    "productName": "NBA经理",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "asar": true,
+    "win": {
+      "icon": "build/icon.png",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "NBA-Manager-${version}.exe"
+    },
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ]
+  }
+}
