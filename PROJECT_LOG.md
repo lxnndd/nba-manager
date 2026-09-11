@@ -2,7 +2,7 @@
 
 > 用途：把本项目的**全部对话成果**压缩成一份自包含文档。新会话只需读这份文件 + 仓库源码，
 > 即可无缝接手开发，无需重看历史对话。
-> 最后更新：v2.2.1（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（私有）。
+> 最后更新：v2.3.0（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（私有）。
 
 ---
 
@@ -12,17 +12,37 @@
 |---|---|
 | 本地路径 | `C:\Users\10709\Desktop\AI\nba-manager` |
 | 技术栈 | Electron 33 + React 19 + TypeScript 5.7 + Vite 6（纯离线单机，无后端） |
-| 当前版本 | **2.2.1**（package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
-| 交付产物 | `release\NBA-Manager-2.2.1.exe`（便携版，78.2MB，双击即玩） |
+| 当前版本 | **2.3.0**（package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
+| 交付产物 | `release\NBA-Manager-2.3.0.exe`（便携版，78.2MB，双击即玩） |
 | 目标用户 | 用户的弟弟（玩英文名单的真实 NBA 模式）；玩家=一支 NBA 球队的总经理 |
 | 名单模式 | `real`（2K27 真实名单，主力玩法）/ `fictional`（虚构名单，自测基线） |
-| 存档 | `%APPDATA%\NBA经理\saves\auto.json`（Electron）或 localStorage 兜底；`SAVE_VERSION = 10` |
-| 自测 | `src/engine/selfTest.ts`（虚构 + 真实双跑，250+ 断言，全绿才发版） |
+| 存档 | `%APPDATA%\NBA经理\saves\auto.json`（Electron）或 localStorage 兜底；`SAVE_VERSION = 11` |
+| 自测 | `src/engine/selfTest.ts`（虚构 + 真实双跑，300+ 断言，全绿才发版） |
+| 本版主题 | 球星得分真实性（文班亚马修正）· 新秀榜与体测数据 · 位置修正 · 三年选秀权 + 次轮 · 乐透抽签/Stepien/新秀薪资 · AI 主动报价 · 事件权衡选项 |
+
+**本版（v2.3.0）各档案章节更新要点**
+
+| 档案章节 | 更新要点 |
+|---|---|
+| §4 数据管线 | 新增 `VET_AGE` 老将年龄表、`fixedOverall` 断崖降分修正、体测解析、位置推断与深度均衡 |
+| §5.2 模拟 | 球权/出手/三分构成全部重标定（`coreBoost`、`ability^1.4`、`p3Base/p3Max` pull、`depthList`） |
+| §5.5 选秀 | 60 签、乐透抽签、Stepien、薪资阶位、入队扩编、`draftComplete` bug 修复 |
+| §5.6 自由市场 | 老将年龄/评分口径指引 |
+| §5.7 交易 | 签带年份/轮次 + `pickValue` 动态定价 |
+| §6 存档 | `SAVE_VERSION = 11`：`DraftPick{year,round}`、`tradeOffers`、`nextDraftClass`、`weight/wingspan`、`TeamEventOption.effects` |
+| §7/§8 地图 | 行数刷新；新增 `DraftView.tsx`、`TradeOffersPanel.tsx`、`tools/build-real-roster.mjs` |
+| §9 验证链 | ui-smoke 补新秀榜与 60 签检查 |
+| §11 遗留 | 新增"签位保护/互换""老将年龄表维护""双向合同"等条目 |
 
 **核心约束（务必遵守）**
 - 引擎**确定性**：所有随机用 `mulberry32(seed)` 种子流；仿真种子公式**不可随意改**（会破坏复现与冻结基线）。
-- 真实名单数值基线（第一季、无成长时）：场均 ~200-207 分/队、FG ~47-48.7%、3P ~37.5%、Doncic ~30 分、戈贝尔 ~14-16 板。改动引擎参数后要复测并记录漂移原因。
+  新增功能的独立流：季中 AI 报价 `l.seed*1301 + day*17 + 5`、乐透抽签 `l.seed*4271 + l.season*613 + 29`、
+  下一届新秀 `seed*5501 + 11`（建档）/`l.seed*5501 + l.season*97 + 23`（逐年）、体测 `height*7919 + age*131 + …`。
+- 真实名单数值基线（第一季、无成长时）：场均 ~203-207 分/队、FG ~46-49%、3P ~37-37.5%、
+  得分王 ~29-30 分、篮板王 ~14 板。改动引擎参数后要复测并记录漂移原因（v2.3.0 记录见 §10.9）。
 - 真实球员 `ovr` 保留 **2K 官方 overall 原值**（95+ 传奇档依赖它）；技能加点通过 `baseSkills` 增量模型回写（见 §5.4）。
+- 真实球员**主/副位置由 tools/build-real-roster.mjs 的 `inferPositions` 推断**（源 2K `positions` 顺序不可靠），
+  改位置逻辑必须重跑 `node tools/build-real-roster.mjs`，并用 `--check` 预览改动清单（见 §4、§10.10）。
 - 每轮改动后跑完整验证链（§9），四路径检查 `%SystemDrive%` 残留（§10.6）。
 
 ---
@@ -71,6 +91,7 @@ node tools/ui-smoke.mjs 9333
 | **v2.1.0** | 新秀保证 1 个 80（未必状元）/ 美国新秀用英文名 / 羁绊显示在小卡片 / 颁奖弹窗可滚动 / 篮板系数下调 / 提前晋级立即显示 / **选秀环节可操作** / 手动加点改自动（优先突出、≤90）/ FA 池素质 55-80 | `genDraftClass` 随机 1 人 ≥80 + `FIRST_EN/LAST_EN` 英文名池；`draftPickUser/draftPickAuto/draftComplete/draftIsUserTurn`；`autoDistribute`（贪心加最高且 <90）；篮板 `orP 0.165`、系数 0.0022、吸附 `pow(reb/70,1.5)`；`refreshPlayoffPlaceholders` + 占位槽 `-1`；`genFreeAgent` 均匀 55-80；`Player.career`（退役报道）、`.awards-modal` 滚动；`SAVE_VERSION=10` |
 | **v2.2.0** | 「自己和 AI 球队 SF/PF/C 三位置更多球权，能力球员更多球权，其他降低」 | `sim.ts` `posW {PG .9, SG .85, SF 1.0, PF .95, C .85}`、`tend {.55,.85,1.0,.9,.8}`、`ability = clamp(1+(ovr-75)*0.012, .7, 1.3)`（持球与出手双加权；自定义 usage 与 PlayCall 仍优先）。实测单场前场出手 43 vs 后场 29 |
 | **v2.2.1** | 「八强进四强最后一个球队在模拟下一轮前没到下一轮」 | 两个叠加根因：①每轮模拟后只要有任何 4 胜就 `runPlayoffRound(length)` → 把下下轮也提前建了；②占位填充 `refreshPlayoffPlaceholders` 被包在 `length < 4` 条件内，轮次达 4 时刷新被跳过 → 最后晋级者不进入下一轮。修复：仅当 `rIdx === playoffRounds.length - 1` 且本轮出现 4 胜才建下一轮，且 `refresh` **始终**执行 |
+| **v2.3.0** | 三批需求：①AI 球队球员位置不对（杰伦·威廉姆斯该打后卫/小前、卡鲁索该打 PG/SG）②选秀权开放到后三年 + 加次轮签 + 签位带年份 ③签价值要随战绩变化 ④AI 打比赛时也要交易球员/选秀权并向玩家报价 ⑤球队动态的选项不能都是扣数值；⑥赛季末就能看 80 人新秀名单（要身高/体重/臂展/年龄）⑦模拟马刺一季后文班亚马得分少了快一半 ⑧自由市场球员数据（威少年龄大了好几岁）⑨选秀规则照真实 NBA 更新 | ①`build-real-roster.mjs` 的 `inferPositions`（身高 + 18 项技能评分 + 相邻约束 + 保守门槛）+ 位置深度均衡；realRoster 增 `q` 字段；`migrateSave` 幂等修正老档（不覆盖玩家手动换位）②`DraftPick` 加 `year/round`，池 180 枚，`freshPickPool/rollPickPool` 滚动窗口 ③`pickValue` 按当季战绩实时 + 年份 ×0.88^off + 次轮低价曲线 ④选秀 60 签（30 首轮先选 + 30 次轮）、80 人池、20 人落选 ⑤`tryAITradeOfferToUser`/`acceptTradeOffer`/`rejectTradeOffer` + UI `TradeOffersPanel` ⑥`TeamEventOption.effects[]` 权衡型选项 ⑦新秀榜：`l.nextDraftClass`（开档即生成 80 人，休赛期直接消耗）+ 新页面 `DraftView` + `weight/wingspan` 体测字段 ⑧得分修复：`posW/tend/ability` 重标定 + `coreBoost` 队内战术地位 + 三分倾向改能力驱动（`p3Base/p3Max` + pull）+ `depthList` 位置借人 ⑨老将 `VET_AGE` 表 + `fixedOverall` 断崖降分修正 ⑩选秀制度：`lotteryOrder` 乐透抽签 + `stepienViolation` Stepien 规则 + `rookieScaleSalary` 薪资阶位 + 休赛期名单扩编到 17；另修 `draftComplete` 撞到用户签提前 break 的老 bug（60 签只签下 37 人） |
 
 **迭代工作方式（继续保持）**：用户（转述弟弟反馈）给需求 → 直接实现 → 全量验证链 → 打包 exe → 更新 Changelog/使用说明 → 交付产物路径 + 变更说明；涉及行为改动时在 `使用说明.txt` 顶部加版本段。
 
@@ -92,7 +113,15 @@ node tools/ui-smoke.mjs 9333
 ```
 
 **年龄推导（2K 数据无年龄字段）**：`ratingHistory.length = len` → `draftYear = 2027 - len`（len=0 → 2026 届新秀），`age = 2026 - draftYear + 18 + hash%4`。
+  ⚠️ 2K 只保留最近 18 个版本，`len >= 18` 是"截断带"（2009 年及以前进联盟），旧公式给 `35 + hash%7` 随机年龄。
+  v2.3.0 起这 17 人按真实出生年份硬编码在 `build-real-roster.mjs` 的 `VET_AGE` 表（威少 37 / 库里 38 / 杜兰特 37 /
+  詹姆斯 41 / 洛瑞 40 / 乐福 38 / 康利 38 / 小乔丹 38 / 霍福德 40 / 大洛 38 / 巴图姆 37 / 戈登 37 / 杰夫·格林 40 /
+  泰·吉布森 41 / 德罗赞 37 / 哈登 37 / 霍勒迪 36）。**新增老将时记得补表**。
+**评分断崖修正（`fixedOverall`）**：数据源对已离队老将会断崖降分（威少 2K26=80 → 2K27=42，delta -38）。
+  若 `ratingHistory[0].delta <= -15` → 用 `hist[1].overall - 3` 替代。
 **数值压缩（勿动）**：2K 属性 → 引擎 7 维用 `c(v,s) = 25 + (v-25)*s`，`three×0.72 / mid·inside×0.82 / ath·def·pas·reb×0.88`；`ovr` 保留 2K 官方值不压缩。
+**体测数据（v2.3.0）**：2K 源有 `weight: "235 lbs"` / `wingspan: "8'0\""` → 解析为磅/英寸写入 `wt`/`ws`；
+  缺失时用 `weightFor` / `wingspanFor` 按身高位置推定（独立确定性流，不扰动主随机序）。
 
 ---
 
@@ -115,14 +144,22 @@ MIN_SALARY = 300（底薪）   MID_LEVEL = 1300（中产，每队每休赛期 1 
 pace：93-104/队；每场回合数 max(80, round(paceAvg + gauss*3))；分钟 scale = 240/(totalSeq*5)
 轮换：AUTO_MINUTES = [36, 12, 0]（按位置深度）；REST 窗口每位置两段，休息时用同位置第 2 人
       自定义 min 生效时按剩余目标贪心；|分差| ≥ 14 且 min ≥ 40 → 垃圾时间上第 3 阵容
-      加时最多 3 个
-球权（v2.2.0）：持球权重 = pow(pas/70,2) × posW[pos] × ability(p)
-                posW = {PG .9, SG .85, SF 1.0, PF .95, C .85}
-                ability = clamp(1 + (ovr-75)*0.012, 0.70, 1.30)
+      加时最多 3 个；v2.3.1 depthList：某位置可用 <2 人时从相邻位置借人（防"独苗打满 48 分钟"），
+      配 taken 集合去重（正常球队行为完全不变）
+球权（v2.3.1）：持球权重 = pow(pas/70,2) × posW[pos] × ability(p)
+                posW = {PG .95, SG .9, SF 1.0, PF 1.0, C .98}（位置差异收窄，内线核心不再被压制）
+                ability = clamp(1 + (ovr-75)*0.022, 0.60, 1.75)
                 usage 自定义 → ×(0.35 + usage*0.13)；PlayCall 发起位 ×2.6，其余无自定义 ×0.85
-出手者：35% 持球人自投；否则 tend[pos] × (0.8 + three/180) × ability
-        tend = {PG .55, SG .85, SF 1.0, PF .9, C .8}
-投篮构成：pos3 = {PG .56, SG .61, SF .46, PF .23, C .1}，posIn = {PG .12, SG .13, SF .28, PF .6, C .76}
+出手者：35% 持球人自投；否则 tend[pos] × (0.8 + three/180) × ability^1.4 × coreBoost
+        tend = {PG .7, SG .9, SF 1.0, PF 1.0, C 1.0}
+        coreBoost（v2.3.1 队内战术地位）：队内 OVR 最高 ×1.5、第二 ×1.2、其余 ×1
+          （缓存 roleCache：key = 队内人数 + 最高 OVR，交易/成长后自动失效）
+投篮构成（v2.3.1 改为能力驱动）：pull = clamp((three-45)/32, 0, 1)
+        p3 = p3Base[pos] + (p3Max[pos]-p3Base[pos]) × pull；持球人自投 ×0.82；clamp 0.02-0.72
+        p3Base={PG .38,SG .40,SF .30,PF .14,C .08}  p3Max={PG .66,SG .68,SF .62,PF .52,C .48}
+        posIn = {PG .12, SG .13, SF .28, PF .6, C .76}（+ (inside-70)*0.003）
+        ⚠️ v2.2 及以前是纯位置表 pos3={PG .56,…,C .1} → 文班亚马这类空间型内线三分占比仅 5%、
+           场均 17.3 分（真实 24.3）；改后 26.1 分 / 三分占比 31%
 命中率：baseMake = {three .33, mid .49, inside .62} + 攻方属性项 − 守方 def 项（+ 二次进攻 +0.08）
 犯规→罚球概率：{three .06, mid .10, inside .17}；罚球率 0.775 + (mid-70)*0.002
 盖帽：近筐 rimFactor=1 / 中投 .2 / 三分 0
@@ -168,11 +205,21 @@ recalcOvr（基准制）：ovr = clamp(baseOvr + (calcOvr(skills) − calcOvr(ba
 ### 5.5 选秀（`gen.ts` + `offseason.ts`，v2.1 起可操作）
 ```
 genDraftClass(rng)：80 人；i<56 美国（英文名）/ 56-60 中国（中文名）/ 60-80 其他（英文名 + 随机国籍）
-  恰好 1 人 ovr 80-83（随机顺位，**未必状元**），其余全部 <80；新秀 ovr ≤ 77 target 生成
-DraftState { class: Player[]; order: DraftPick[](30 签按 f 战绩差排序); next: number; picked: number[] }
+  恰好 1 人 ovr 80-83（**未必状元**），其余全部 <80；新秀 ovr ≤ 77 target 生成
+  v2.3.0：天骄从 ovr ≥ 72 的池子里抽（此前完全等概率 → 会出现"OVR 80 却只有 3 星潜力"的怪状元），
+         且保证潜力 ≥ 7 星
+DraftState { year, class: Player[](80 人池), order: DraftPick[](60 签 = 30 首轮 + 30 次轮), next, picked }
 接口：draftIsUserTurn / draftRemaining / draftPickAuto(AI 选池中最高 ovr) / draftPickUser(玩家点选) /
      draftComplete(代选全部 + 落选进 FA + 汇总 news + draft=null)
-入队：满 17 → 落选进 FA；满 15 → 先裁最弱冗余位（联盟人数守恒）；finishOffseason 兜底 draftComplete
+选秀顺位（v2.3.0 乐透抽签，`league.ts lotteryOrder`）：14 支未进季后赛球队按
+      LOTTERY_ODDS=[.14,.14,.14,.125,.105,.095,.086,.075,.064,.055,.045,.032,.024,.018] 抽前 4 顺位，
+      其余乐透队 5-14 按战绩逆序、进季后赛的 16 队 15-30 按战绩逆序；次轮无乐透（纯战绩逆序）。
+      rng 独立流：l.seed*4271 + l.season*613 + 29（不扰动休赛期既有随机序）
+新秀合同（v2.3.0）：首轮 rookieScaleSalary(n) = clamp(1200-(n-1)*34.5, 200, 1200) 万 · 4 年；
+      次轮 clamp(salaryFor(ovr), 200, MIN_SALARY) · 2 年
+入队规则（v2.3.0）：休赛期上限 ROSTER_MAX(17)，选中直接扩编（此前 15 人就裁人 → 刚选中的新秀
+      常被自己球队裁掉，一届 60 签只留下 36 人）；满 17 裁最弱冗余位腾位；开季前统一裁到 15
+      ⚠️ 另修：draftComplete 撞到"用户持有的签"曾直接 break（60 签只签下 37 人），现已改为循环内代选
 ```
 
 ### 5.6 自由市场（`offseason.ts`，7 天窗口）
@@ -183,6 +230,8 @@ DraftState { class: Player[]; order: DraftPick[](30 签按 f 战绩差排序); n
 AI 竞价：ask × (0.93 ~ 1.08)；star 风格且 ovr ≥ 88 → 接受门槛 0.85 → 0.78
 池：保底 55 + randInt(0,10) 人；genFreeAgent 能力**均匀 55-80**；30+ 岁 8% 去海外
 赛季中「自由市场」页：signFreeAgentNow 即时签约（无 AI 竞价，≥ 要价 85% 成交）
+⚠️ 老将年龄/评分口径见 §4（VET_AGE 表 + fixedOverall 断崖降分修正）——自由市场里的
+   威少 37 岁 / 77 分（修正前 41 岁 / 42 分）
 ```
 
 ### 5.7 交易（`league.ts`）
@@ -242,29 +291,36 @@ faDay/faOffers/poffExitShown/pendingEvents/draft。新档为幂等 no-op。
 
 | 文件（行数） | 职责 / 关键导出 |
 |---|---|
-| `src/engine/types.ts` (262) | 全部类型 + `SAVE_VERSION`；`DraftState`/`PendingTeamEvent`/`FaOffer` |
-| `src/engine/data.ts` (84) | 30 队 `TEAMS`、`POS_ORDER`、中文姓名池 `FIRST_NAMES/LAST_NAMES`、英文名池 `FIRST_EN/LAST_EN` |
-| `src/engine/realRoster.ts` (1244) | AUTO-GENERATED：`REAL_ROSTER`（30 队 449 人）、`REAL_FA`（115）、`ZH_NAME_MAP` |
-| `src/engine/gen.ts` (737) | `genPlayer`/`genTeamRoster`/`genRookie`/`genDraftClass`/`genFreeAgent`/`realFaPlayer`、`createLeague`(fictional,2025)/`createRealLeague`(real,2026)/`finishLeague`、`makeSchedule`、`calcOvr/calcLin/genSkills/attrsFromSkills/deriveSkills/fromRealSkills`、`salaryFor`/`resalaryIfLegacy`、`potentialToStar`/`POS_SEC`、`heightLabel`(cm)、`repositionPlayer`(主副互换)、`assignTags`、`TEAM_STYLES`/`COACH_STYLES`/`applyTeamStyle`/`applyCoachStyle` |
-| `src/engine/sim.ts` (551) | `simulateGame(away,home,rng,accumulate=true,injurySeed?,mods?)`、`possession`/`reboundAfterMiss`、`teamEffMods`/`bondMods`、轮换 `manualRotation/targetMinutes/sideLineup/AUTO_MINUTES`、伤病 `injuryRisk/pregameInjury` |
-| `src/engine/league.ts` (772) | `simDay`、`standings`/`leaders`/`perGame`、季后赛 `runPlayoffRound/simPlayoffGame/playoffDone/playoffChampion/refreshPlayoffPlaceholders`、`playerScore`、`migrateSave`、`sortRoster`、`tradeValue/pickValue/pickLabel/evaluateTrade/applyTrade/teamStrength`、劳资常量、`payrollOf`、`tryAISeasonTrade`、`nextGameOf/playedCount` |
-| `src/engine/offseason.ts` (747) | `timeCoefOf/growthPointsFor/agingPenaltyOf/recalcOvr/spendPoint/autoDistribute`、`agePlayer`、`beginOffseason`、`settleFreeAgency/signFreeAgentNow/cutPlayer`、`simulateOffseasonAI/simulateAIOffseasonTrades`、`finishOffseason`、选秀 `draftIsUserTurn/draftRemaining/draftPickAuto/draftPickUser/draftComplete`、`askFor/canSign`、`MIN_SALARY/MID_LEVEL` |
-| `src/engine/awards.ts` (142) | `computeSeasonAwards`（幂等，常规奖）、`computeFinalsMVP`（独立 FMVP）、`lineScore` |
-| `src/engine/events.ts` (83) | `rollPostGameEvent`（含带选项事件）、`resolveTeamEvent` |
-| `src/engine/rng.ts` (45) | `mulberry32/gauss/randInt/pick/shuffle/clamp` |
-| `src/engine/selfTest.ts` (782) | 全量自测（虚构 + 真实双跑）；`TEST_SEED` 可覆盖 |
+| `src/engine/types.ts` (325) | 全部类型 + `SAVE_VERSION`；`DraftPick{year,round}`/`DraftState.year`/`AiTradeOffer`/`TeamEventOption.effects`/`Player.weight,wingspan` |
+| `src/engine/data.ts` (91) | 30 队 `TEAMS`、`POS_ORDER`、中文姓名池 `FIRST_NAMES/LAST_NAMES`、英文名池 `FIRST_EN/LAST_EN` |
+| `src/engine/realRoster.ts` (1251) | AUTO-GENERATED：`REAL_ROSTER`（30 队 449 人）、`REAL_FA`（115）、`ZH_NAME_MAP`；球员含 `p/q`（主/副位置）、`wt/ws`（体重/臂展） |
+| `src/engine/gen.ts` (912) | `genPlayer`/`genTeamRoster`/`genRookie`/`genDraftClass`/`genFreeAgent`/`realFaPlayer`、`createLeague`/`createRealLeague`/`finishLeague`、`makeSchedule`、`calcOvr/calcLin/genSkills/attrsFromSkills/deriveSkills/fromRealSkills`、`salaryFor`、`potentialToStar`/`POS_SEC`、`heightLabel/weightLabel/wingspanLabel/lbsLabel/feetLabel`、`weightFor/wingspanFor/ensureMeasure`、`freshPickPool/rollPickPool/PICK_YEARS`、`makeNextDraftClass`、`repositionPlayer`、`assignTags`、`TEAM_STYLES`/`COACH_STYLES`/`applyTeamStyle`/`applyCoachStyle` |
+| `src/engine/sim.ts` (650) | `simulateGame(away,home,rng,accumulate=true,injurySeed?,mods?)`、`possession`/`reboundAfterMiss`、`coreBoost`（队内战术地位）、`depthList`（位置深度借人）、`teamEffMods`/`bondMods`、轮换 `manualRotation/targetMinutes/sideLineup/AUTO_MINUTES`、伤病 `injuryRisk/pregameInjury` |
+| `src/engine/league.ts` (1088) | `simDay`、`standings`/`leaders`/`perGame`、季后赛 `runPlayoffRound/simPlayoffGame/playoffDone/playoffChampion/refreshPlayoffPlaceholders`、`playerScore`、`migrateSave`、`sortRoster`、`tradeValue/pickValue/pickLabel/evaluateTrade/applyTrade/teamStrength`、`lotteryOrder`/`stepienViolation`/`rookieScaleSalary`、`tryAITradeOfferToUser`/`acceptTradeOffer`/`rejectTradeOffer`、劳资常量、`payrollOf`、`tryAISeasonTrade`、`nextGameOf/playedCount` |
+| `src/engine/offseason.ts` (848) | `timeCoefOf/growthPointsFor/agingPenaltyOf/recalcOvr/spendPoint/autoDistribute`、`agePlayer`、`beginOffseason`（乐透抽签 + 建选秀 + 下一届新秀）、`settleFreeAgency/signFreeAgentNow/cutPlayer`、`simulateOffseasonAI/simulateAIOffseasonTrades`、`finishOffseason`、选秀 `draftIsUserTurn/draftRemaining/draftPickAuto/draftPickUser/draftComplete/assignRookie`、`askFor/canSign`、`MIN_SALARY/MID_LEVEL` |
+| `src/engine/awards.ts` (162) | `computeSeasonAwards`（幂等，常规奖）、`computeFinalsMVP`（独立 FMVP）、`lineScore` |
+| `src/engine/events.ts` (109) | `rollPostGameEvent`（含带选项事件）、`resolveTeamEvent`（多效果）、`CHEM_OPTS`/`BRAND_OPTS` 权衡型选项 |
+| `src/engine/rng.ts` (52) | `mulberry32/gauss/randInt/pick/shuffle/clamp` |
+| `src/engine/selfTest.ts` (1029) | 全量自测（虚构 + 真实双跑，300+ 断言）；`TEST_SEED` 可覆盖 |
 | `src/ui/*.tsx` | 见 §8 |
-| `src/theme.css` (822) | 深色主题（#0d1117 系）+ 全部组件样式（含 v2.x 的 `.award-cards.big`/`.draft-*`/`.rot-*`/`.series-card.partial`/`.rc-tags`/`.event-*`/`.up-*`） |
+| `src/theme.css` (946) | 深色主题（#0d1117 系）+ 全部组件样式（含 `.award-cards.big`/`.draft-*`/`.db-*`（新秀榜）/`.to-*`（AI 报价卡）/`.rot-*`/`.series-card.partial`/`.event-*`） |
+| `tools/build-real-roster.mjs` | 2K 数据 → realRoster.ts：`VET_AGE`（老将年龄表）、`fixedOverall`（断崖降分修正）、`inferPositions`（位置推断）、`balancePositions`（位置深度均衡）、`parseWeight/parseWingspan`；`--check` 只预览位置改动 |
 | `electron/main.cjs` | 主进程：`process.chdir(exe 目录)`、`%SystemDrive%` 清理循环、存档 read/write/list、文件导出导入、单实例锁 |
 
 ---
 
 ## 8. UI 地图（`src/ui/`）
 
-- **App.tsx**：顶栏（版本号 ×2 处）、4+1 个 tab（🏀赛程 / 🧩阵容 / 🤝交易 / 💼自由市场 / 📊联盟）、
+- **App.tsx**：顶栏（版本号 ×2 处）、5+1 个 tab（🏀赛程 / 🧩阵容 / 🤝交易 / 💼自由市场 / 📊联盟 / 🎓新秀）、
   `l.offseason` 为真时整页切 `OffseasonView`、赛季结束横幅、`ChangelogModal`（每次启动强制显示）。
 - **TitleScreen.tsx**：菜单 → 选队（30 队卡片）→ **球队风格二选一**（居中）→ **执教风格三选一** → 开局；
   背景 10 张图 20s 轮播（`.title-bg` 需 `:not()` 选择器避免被 `>*` 覆盖）。
+- **DraftView.tsx**（v2.3.0 新页面）：下一届新秀榜（`l.nextDraftClass` 80 人），表格列 = 预测顺位/
+  头像/姓名/位置/年龄/身高/体重/臂展/OVR/潜力星/国籍，支持按实力·年龄·身高排序，点行开 `PlayerModal`；
+  顶部显示我的签与选秀时间。`.draft-board`/`.db-*`。
+- **TradeOffersPanel.tsx**（v2.3.0 新组件）：AI 主动报价卡（`.trade-offer-card`/`.to-*`）——双方筹码、
+  估值差（赚/亏）、AI 理由、「✓ 接受交易」/「✕ 拒绝」；被 `ScheduleView`（球队动态）与
+  `OffseasonView`（休赛期 step3）共用。
 - **ScheduleView.tsx**（577 行，最复杂）：`doSim`（分批推进）、日历式回看（`manualDay`，注意 `dayGames`
   useMemo 依赖要含 `l.results.length`）、`poffStepOnce`（逐系列一场 + 提前建轮 + refresh）、
   `fastToFinals`、`PlayoffBracket`（7 列左右镜像，`SeriesCell` 支持占位/半成品）、`SeriesDetailModal`、
@@ -300,8 +356,9 @@ faDay/faOffers/poffExitShown/pendingEvents/draft。新档为幂等 no-op。
 4. `electron-builder --win portable` → `release\NBA-Manager-x.y.z.exe`（先杀 NBA*/electron 进程）
 5. **CDP 真机冒烟** `tools/ui-smoke.mjs 9333`（步骤：标题屏/背景 → 关公告 → 选队 → 双风格 2+3 卡 →
    模拟到下一场 ×4 推进 → 快进 7 天 → 战报弹窗 → 阵容轮换+气质 → 交易头像/详情/自动预检 →
+   **选秀权 6 枚/队（未来 3 年 × 首轮/次轮）** → **新秀榜 80 行 + 体测行** →
    季后赛对位图 7 列 + 逐场弹窗 → 快进总决 + 冠军 15 人 + FMVP 卡 + 颁奖弹窗 4 卡/2 防守阵 →
-   **休赛期选秀面板 + 自动完成 + 进入市场**）
+   **休赛期选秀面板（60 签：30 首轮 + 30 次轮）+ 自动完成 + 进入市场**）
 6. portable exe 冒烟：`$env:DSH_AUTOQUIT_MS='8000'; Start-Process release\NBA-Manager-x.y.z.exe -Wait`
 7. 四路径 `%SystemDrive%` 残留检查（§10.6）
 8. `node tools/prune-old-releases.mjs`（保留最近 2 个版本 exe）；更新 Changelog/使用说明/版本号
@@ -342,17 +399,34 @@ faDay/faOffers/poffExitShown/pendingEvents/draft。新档为幂等 no-op。
    `portable.artifactName = "NBA-Manager-${version}.exe"`；**严禁对 portable exe 用 rcedit**（会丢 NSIS overlay 变 53KB 损坏）；
    exe 图标由 `build/icon.png`（篮球）在 makensis 编译期嵌入。打包前必须杀掉旧实例，否则 electron-builder 占用失败。
 9. **冻结基线**：真实名单第一季场均约 200-207 分/队；改动引擎参数（球权/篮板/命中率）后数值会漂移，
-   需在验收时说明原因（例：v2.2.0 球权前场化 + v2.1 篮板下调 → 207.6；v2.1 篮板下调后更早一轮为 199-205）。
+   需在验收时说明原因（例：v2.2.0 球权前场化 + v2.1 篮板下调 → 207.6；v2.2.1 → 205.5）。
+   **v2.3.0 记录**：205.5 → **206.3 分/队**（FG 49.6% → 48.0%，3P 37.4% → 37.0%，得分王 26.1 → 29.5）。
+   漂移原因：①球权向球星集中（`coreBoost`）②三分倾向改能力驱动（空间型内线开始大量投三分，FG 略降、三分占比上升）
+   ③位置口径修正改变了轮换与球权分布。**这是有意为之的方向性调整**（球星产量贴近真实），不是回归。
+10. **位置推断的三条铁律（v2.3.0 血泪教训）**：
+    - 数据源的 `positions` 顺序**不可信**（Jalen Williams 6'5" 被标 C/PF、Caruso 被标 SF/PG），必须用身高 + 技能推断；
+    - **别用身高硬过滤**：最初按身高把 6'11" 的杜兰特限成 PF/C（错得离谱）。要用「技能契合分 + 身高契合分」联合评分，
+      且身高契合用**软惩罚**（每超 1 英寸 −3.5 分）而非硬性排除；
+    - **改动前先自动预览**：`node tools/build-real-roster.mjs --check` 会列出全部位置改动，逐条核对名人案例再落盘；
+    - 位置推断改完必须做**队伍位置深度均衡**（每队每位置 ≥2 人），否则"某队某位置独苗 → 打满 48 分钟"
+      （湖人 PG 只有东契奇时实测 48.0 分钟 / 38.8 分）。
+11. **引擎简化的补偿系数要标定，不要凭直觉**：v2.3.0 的 `coreBoost`（队内第一选择 ×1.5）看似激进，
+    但它是对"回合模型过于平均主义"的补偿——按真实 2025-26 赛季 8 位球星的场均得分标定后，
+    6 位误差在 1 分内（文班 24.3→26.1、塔图姆 26.8→28.5、库里 24.5→25.7）。改这类系数前先跑对照表。
 
 ---
 
 ## 11. 已知遗留 / 后续可做（TODO）
 
-- **场均得分**：当前两队合计约 200-207 分（约 100-104 分/队），低于现代 NBA（两队合计 ~225-230）。引擎历史特征，若要贴近真实需上调命中率基准或节奏（改动后须复测全季基线）。
+- **场均得分**：当前两队合计约 206 分（≈103 分/队），略低于现代 NBA（~230）。
+  v2.3.0 球权集中化 + 三分结构修正后已明显改善（三分占比更接近真实），若要进一步贴近真实需上调节奏或命中率基准（改动后须复测全季基线）。
+- **选秀权保护与互换**：真实 NBA 的"前 8 保护""签位互换"尚未实现（当前签位为无保护）。
+- **选秀权年限**：当前开放未来 3 年（用户指定）；真实规则允许交易未来 7 年首轮，如需放宽改 `PICK_YEARS`。
 - **exe 图标**：已用 `build/icon.png` 篮球图标；如需自定义更精致图标替换该文件即可（勿用 rcedit）。
 - **真实名单 ovr 与算法总评差异**：真实球员保留 2K 官方值（如塔图姆官方 93 / 算法 84），面板会显示对照说明。
-- **未实现的劳资细节**：奢侈税罚款、球员选项/球队选项、交易否决权、双向合同、选秀权保护与互换。
-- **选秀权类型**：仅首轮签（30 枚）；可扩展次轮签/签位保护。
+- **未实现的劳资细节**：奢侈税罚款、球员选项/球队选项、交易否决权、双向合同（每队 3 人 / 最多 50 场）、
+  10 天短合同、买断。
+- **老将年龄表维护**：`VET_AGE` 只覆盖 17 位"截断带"老将；若数据源更新（新的 2K 版本）需重新检查该表（§4）。
 - **ui-smoke 覆盖**：尚未覆盖"玩家签轮到时的 80 池点选"UI（引擎路径已由 selfTest 断言）；
   可按需在 ui-smoke 中构造"玩家持有第 1 签"的场景补测。
 - **球队详情/合同**：暂无球员合同年限逐年在 UI 上的明细表（仅显示剩余年限与年薪）。

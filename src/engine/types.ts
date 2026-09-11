@@ -72,6 +72,9 @@ export interface Player {
   attrs: Attrs;
   body: BodyAttrs;   // v0.3.7 身体属性
   height: number; // 英寸（展示层换算 cm）
+  // ---- v2.3.0 体测数据（新秀球探报告 / 球员详情展示）----
+  weight?: number;   // 体重（磅；展示层换算 kg）
+  wingspan?: number; // 臂展（英寸；展示层换算 cm）
   salary: number; // 年薪（万美元）；自由球员=0
   contractYears: number; // 剩余合同年数；0 = 自由球员
   // v2.0：潜力 1-10（星）：决定每个休赛期可分配成长点数（× 成长阶段 × 出场时间系数）
@@ -145,10 +148,14 @@ export interface Team {
 // 球队风格（v2.0：style 仅 youth/star；iron/locker/brand 归 coachStyle）
 export type TeamStyleId = 'youth' | 'star' | 'iron' | 'locker' | 'brand';
 
-// 未来首轮选秀权：o=持有队(owner) f=签的原始归属(from，顺位质量按 from 战绩)
+// 未来选秀权：o=持有队(owner) f=签的原始归属(from，顺位质量按 from 战绩)
+// v2.3：签带年份与轮次——每队每年 1 首轮 + 1 次轮，交易市场开放未来 3 年（滚动窗口）
+export type PickRound = 1 | 2;
 export interface DraftPick {
   o: number;
   f: number;
+  year: number;     // 选秀年份（现实年份，如 2027）
+  round: PickRound; // 1 = 首轮，2 = 次轮
 }
 
 export interface GameResult {
@@ -213,10 +220,20 @@ export interface FaOffer {
 }
 
 // ============ v2.0 球队动态待处理事件（更衣室不和谐/气氛火热 → 处理选项二选一） ============
+export type MetaKey = 'chemistry' | 'discipline' | 'brand' | 'fans';
+
+// v2.3：一个选项可以同时改变多项数值（权衡型：有得有失，不再"两个选项都在扣"）
+export interface TeamEventEffect {
+  key: MetaKey;
+  delta: number; // 正负点数（如 +3 / -2；fans 单位为万）
+}
+
 export interface TeamEventOption {
-  key: 'chemistry' | 'discipline';
-  delta: number; // 正负点数（如 -3 / +3）
-  label: string; // 按钮文案
+  label: string; // 按钮文案（已含效果说明）
+  effects: TeamEventEffect[];
+  // ---- v2.2 及以前的单效果字段（旧存档迁移时折算为 effects，新档不写） ----
+  key?: MetaKey;
+  delta?: number;
 }
 
 export interface PendingTeamEvent {
@@ -227,10 +244,24 @@ export interface PendingTeamEvent {
 
 // ============ v2.1 选秀大会状态（休赛期手动操作：玩家持有的签可挑选 80 人池） ============
 export interface DraftState {
+  year: number;        // v2.3：本届选秀年份（现实年份）
   class: Player[];     // 本届 80 人池（id 已分配；选中后从池中移除）
-  order: DraftPick[];  // 按签的归属队(from)战绩差排好的签序（o=持有队）
+  order: DraftPick[];  // 按签的归属队(from)战绩差排好的签序（o=持有队；v2.3 首轮 30 枚在前、次轮 30 枚在后）
   next: number;        // 下一个待处理签的 order 下标
   picked: number[];    // 已选中球员 id（新秀入队/落选）
+}
+
+// ============ v2.3 AI 主动向玩家发出的交易报价（球队动态里接受/拒绝） ============
+export interface AiTradeOffer {
+  id: number;
+  fromTeamId: number;    // 报价的 AI 球队
+  givePids: number[];    // 玩家送出（球员 id）
+  givePickIdx: number[]; // 玩家送出（draftPool 下标）
+  wantPids: number[];    // 玩家得到（球员 id）
+  wantPickIdx: number[]; // 玩家得到（draftPool 下标）
+  day: number;           // 生成时的比赛日
+  year: number;          // 生成时的年份（跨季失效）
+  note: string;          // AI 的说明（为什么想要/为什么愿意给）
 }
 
 export interface LeagueState {
@@ -260,7 +291,7 @@ export interface LeagueState {
   awards: SeasonAwards | null; // 本赛季奖项（颁奖后缓存，至新赛季开始前）
   news: string[];         // 休赛期滚动消息（退役/签约/交易）
   finalsAccum: FinalsLine[]; // 总决赛全部场次的累计战报（FMVP 依据）
-  // ---- v0.3.1：未来首轮选秀权池（每队默认 1 枚；交易可转移持有者） ----
+  // ---- v0.3.1：未来选秀权池（v2.3：每队未来 3 年 × 首轮/次轮 = 180 枚；交易可转移持有者） ----
   draftPool: DraftPick[];
   // ---- v2.0 自由市场 7 天窗口：当前天(1-7) + 玩家待结算报价 ----
   faDay: number;
@@ -271,6 +302,11 @@ export interface LeagueState {
   pendingEvents: PendingTeamEvent[];
   // ---- v2.1 休赛期选秀大会（手工操作；正常流程结束后置 null）----
   draft: DraftState | null;
+  // ---- v2.3 AI 主动报价（季中/休赛期 AI 会向玩家要人或兜售球员+选秀权；玩家接受或拒绝）----
+  tradeOffers: AiTradeOffer[];
+  // ---- v2.3.0 下一届选秀预测名单（80 人）：开档即生成，常规赛/休赛期随时可查看，
+  //      休赛期选秀时直接作为本届新秀池消耗，然后重新生成下一届 ----
+  nextDraftClass: Player[];
 }
 
 export interface GameRef {
@@ -279,7 +315,8 @@ export interface GameRef {
 }
 
 // ============ 存档 ============
-export const SAVE_VERSION = 10;
+// v11：选秀权带年份/轮次（首轮+次轮，未来 3 年滚动）+ AI 主动报价 + 事件选项多效果
+export const SAVE_VERSION = 11;
 export interface SaveFile {
   kind: 'nba-manager-save';
   saveVersion: number;

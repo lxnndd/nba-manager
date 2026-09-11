@@ -8,6 +8,7 @@ import { AwardsPanel, AwardsSummary, AwardsModal, AwardCard } from './AwardsPane
 import { BoxScoreModal } from './BoxScoreModal';
 import { TeamLogo } from './TeamLogo';
 import { PlayerFace } from './PlayerFace';
+import { TradeOffersPanel } from './TradeOffersPanel';
 import { fmt1 } from './format';
 import type { GameApi } from './useGame';
 
@@ -407,10 +408,11 @@ export function ScheduleView({ api, onSeasonEnd }: { api: GameApi; onSeasonEnd: 
         })()}
       </div>
 
-      {/* v1.2 球队动态：伤病 + 球队气质随机事件（v2.0 事件带处理选项二选一） */}
-      {(l.news.length > 0 || (l.pendingEvents?.length ?? 0) > 0) && (
+      {/* v1.2 球队动态：伤病 + 球队气质随机事件（v2.0 事件带处理选项；v2.3 AI 报价也在这里） */}
+      {(l.news.length > 0 || (l.pendingEvents?.length ?? 0) > 0 || (l.tradeOffers?.length ?? 0) > 0) && (
         <div className="news-panel">
           <div className="section-title">📰 球队动态</div>
+          <TradeOffersPanel l={l} onAction={() => api.tick()} />
           {l.pendingEvents && l.pendingEvents.length > 0 && (
             <div className="event-pending">
               {l.pendingEvents.map((ev) => (

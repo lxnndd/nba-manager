@@ -13,6 +13,7 @@ import { SALARY_CAP, TAX_LINE, ROSTER_MAX } from '../engine/league';
 import { TEAM_STYLES, COACH_STYLES, applyTeamStyle, applyCoachStyle } from '../engine/gen';
 import { money, ovrClass, POS_CN } from './format';
 import { PlayerFace } from './PlayerFace';
+import { TradeOffersPanel } from './TradeOffersPanel';
 import type { GameApi } from './useGame';
 
 export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: () => void }) {
@@ -164,10 +165,10 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
           </div>
           {draft && (
             <div className="draft-panel">
-              <div className="sec-title">🎓 选秀大会（共 {draft.order.length} 签 · 池内剩余 {draft.class.length} 人）</div>
+              <div className="sec-title">🎓 {draft.year} 年选秀大会（共 {draft.order.length} 签：30 首轮 + 30 次轮 · 池内剩余 {draft.class.length} 人）</div>
               <div className="draft-status">
                 {curPick
-                  ? `当前顺位：第 ${draft.next + 1} 签 · ${l.teams[curPick.o] ? `${l.teams[curPick.o].city} ${l.teams[curPick.o].name}` : '?'}${curPick.f !== curPick.o ? `（持有 ${l.teams[curPick.f].abbr} 的签）` : ''}`
+                  ? `当前第 ${draft.next + 1} 顺位（${curPick.round === 1 ? '首轮' : '次轮'}）· ${l.teams[curPick.o] ? `${l.teams[curPick.o].city} ${l.teams[curPick.o].name}` : '?'}${curPick.f !== curPick.o ? `（持有 ${l.teams[curPick.f].abbr} 的签）` : ''}`
                   : '全部签已处理，正在收尾…'}
               </div>
               {userTurn ? (
@@ -311,6 +312,8 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
       {step >= 3 && (
         <div className="action-card">
           <div className="action-title">📰 休赛期结果 · 市场与交易</div>
+          {/* v2.3：休赛期 AI 也会主动报价（接受/拒绝就在卡片上操作） */}
+          <TradeOffersPanel l={l} onAction={() => api.tick()} heading="📨 休赛期 AI 交易报价" />
           <div className="offseason-report">
             <NewsList l={l} />
           </div>

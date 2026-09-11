@@ -2,7 +2,7 @@
 // 验证：名单结构、比分分布、全季推进、季后赛、赛季奖项、休赛期（FA/AI交易）、存档迁移
 import { createLeague, createRealLeague, repositionPlayer, bodyKeys, genRookie, genDraftClass, genFreeAgent, TEAM_STYLES, COACH_STYLES, applyTeamStyle, applyCoachStyle, assignTags, calcOvr, SKILL_KEYS, genSkills, POS_SEC } from './gen';
 import { simulateGame, bondMods, teamEffMods } from './sim';
-import { simDay, runPlayoffRound, simPlayoffGame, playoffChampion, evaluateTrade, applyTrade, standings, leaders, nextGameOf, playedCount, migrateSave, teamStrength, pickValue, tradeValue, ROSTER_MAX, payrollOf, SALARY_CAP, TAX_LINE, refreshPlayoffPlaceholders } from './league';
+import { simDay, runPlayoffRound, simPlayoffGame, playoffChampion, evaluateTrade, applyTrade, standings, leaders, nextGameOf, playedCount, migrateSave, teamStrength, pickValue, tradeValue, ROSTER_MAX, payrollOf, SALARY_CAP, TAX_LINE, refreshPlayoffPlaceholders, tryAITradeOfferToUser, acceptTradeOffer, rejectTradeOffer, pickLabel, lotteryOrder, rookieScaleSalary } from './league';
 import { computeSeasonAwards, computeFinalsMVP } from './awards';
 import { rollPostGameEvent, resolveTeamEvent } from './events';
 import type { Player } from './types';
@@ -82,9 +82,11 @@ function runOffseasonFlow(l: LeagueState, tag: string, offerTest: boolean): void
   ok(l.history[l.history.length - 1].finalsMvpId === fm?.playerId, `${tag} history FMVP 记录`);
   // v2.0 休赛期重置字段
   ok(l.faDay === 1 && (l.faOffers?.length ?? 0) === 0 && !l.poffExitShown, `${tag} FA 7 天窗口重置`);
-  // v2.1 选秀大会：池 80 人 / 30 签；轮到玩家签可手动挑选；随后一键完成
+  // v2.1/v2.3 选秀大会：池 80 人 / 60 签（30 首轮 + 30 次轮，均为下一届年份）；轮到玩家签可手动挑选
   const d0 = l.draft;
-  ok(!!d0 && d0.class.length === 80 && d0.order.length === 30 && d0.picked.length === 0, `${tag} 选秀池初始化（80 人 / ${d0?.order.length} 签）`);
+  ok(!!d0 && d0.class.length === 80 && d0.order.length === 60 && d0.picked.length === 0, `${tag} 选秀池初始化（80 人 / ${d0?.order.length} 签）`);
+  ok(!!d0 && d0.order.filter((pk) => pk.round === 1).length === 30 && d0.order.filter((pk) => pk.round === 2).length === 30, `${tag} 选秀签序 = 30 首轮 + 30 次轮`);
+  ok(!!d0 && d0.order.every((pk) => pk.year === d0.year) && d0.year === l.year + 1, `${tag} 选秀签年份一致（${d0?.year}）`);
   if (d0 && l.userTeamId >= 0 && draftIsUserTurn(l)) {
     const best = [...d0.class].sort((a, b) => b.ovr - a.ovr)[0];
     ok(!!best && draftPickUser(l, best.id), `${tag} 玩家持有的签可手动挑选`);
@@ -124,7 +126,11 @@ function runOffseasonFlow(l: LeagueState, tag: string, offerTest: boolean): void
   ok(l.schedule.length === 170, `${tag} 新赛程 170 天`);
   checkRoster(l, `${tag} 新赛季`, 15); // 开季裁至 15
   ok(l.teams.every((t) => t.players.every((p) => p.gp === 0 && p.starts === 0)), `${tag} 赛季数据重置`);
-  ok(l.draftPool.length === 30 && l.draftPool.every((pk, i) => pk.o === i && pk.f === i), `${tag} 首轮签池重置 30 枚`);
+  // v2.3：选秀权池 = 每队未来 3 年 × 首轮/次轮 = 180 枚；年份窗口滚动
+  ok(l.draftPool.length === 180, `${tag} 选秀权池 180 枚（30 队 × 3 年 × 2 轮，实际 ${l.draftPool.length}）`);
+  ok(l.draftPool.every((pk) => pk.year >= l.year + 1 && pk.year <= l.year + 3), `${tag} 签的年份都在未来 3 年内`);
+  ok(l.draftPool.filter((pk) => pk.round === 1 && pk.year === l.year + 1).length === 30, `${tag} 下一届首轮 30 枚`);
+  ok(l.draftPool.filter((pk) => pk.round === 2 && pk.year === l.year + 1).length === 30, `${tag} 下一届次轮 30 枚`);
   // v2.0 加点兜底：所有人点数清零（未手动分配的被自动分配）
   ok(l.teams.every((t) => t.players.every((p) => (p.points ?? 0) === 0)), `${tag} 加点全部分配/清零`);
   const names = new Set(l.teams.flatMap((t) => t.players).map((p) => p.name));
@@ -291,14 +297,19 @@ function run(): void {
     ok(ev.teams[0].chemistry >= 0 && ev.teams[0].chemistry <= 100, 'chemistry 保持在 0-100');
     ok(ev.teams[0].fans >= 20 && ev.teams[0].fans <= 600, 'fans 保持在 20-600 万');
     ok((ev.pendingEvents?.length ?? 0) <= 5, `待处理事件不积压（${ev.pendingEvents?.length ?? 0} 条）`);
-    // 处理一条带选项事件：二选一应用效果并移除
+    // 处理一条带选项事件：多效果应用并移除
     if (ev.pendingEvents && ev.pendingEvents.length > 0) {
       const pend = ev.pendingEvents[0];
-      const before = ev.teams[0][pend.options[0].key];
+      const eff = pend.options[0].effects ?? [];
+      const cap = (k: string) => (k === 'fans' ? 600 : 100);
+      const before = eff.map((e) => ev.teams[0][e.key]);
       resolveTeamEvent(ev, pend.id, pend.options[0]);
       ok(!ev.pendingEvents?.some((e) => e.id === pend.id), '事件处理后移除');
-      ok(ev.teams[0][pend.options[0].key] === before + pend.options[0].delta, `选项效果应用（${before}→${ev.teams[0][pend.options[0].key]}）`);
+      ok(eff.every((e, i) => ev.teams[0][e.key] === Math.max(0, Math.min(cap(e.key), before[i] + e.delta))),
+        `选项多效果应用（${eff.map((e) => `${e.key} ${e.delta > 0 ? '+' : ''}${e.delta}`).join(' · ')}）`);
       ok(ev.news.some((n) => n.includes('已处理')), '处理结果写入动态');
+      // v2.3：每个选项都必须至少含一项加成（不能两个选项都在扣数值）
+      ok(pend.options.every((o) => (o.effects ?? []).some((e) => e.delta > 0)), '球队动态选项都含加成项（不再是纯扣数值）');
     }
   }
   {
@@ -457,6 +468,214 @@ function run(): void {
   ok(v2.reason.length > 0, '带签交易可评估');
   // apron 硬顶/税线约束应能进入 reason（队 0 若超税线会有对应文案；不强制 accept）
   ok(v2.reason.includes('估值'), 'reason 含估值明细');
+
+  // ---------- v2.3 选秀权体系（年份 + 次轮 + 随战绩变化的价值） ----------
+  console.log('== v2.3 选秀权体系（未来 3 年 × 首轮/次轮）==');
+  {
+    const pl = createRealLeague(seed + 4242);
+    pl.userTeamId = 0;
+    const mine = (round: 1 | 2, off: number) =>
+      pl.draftPool.find((pk) => pk.o === 0 && pk.round === round && pk.year === pl.year + off);
+    const f1 = mine(1, 1), s1 = mine(2, 1), f3 = mine(1, 3);
+    ok(pl.draftPool.length === 180, `签池 180 枚（${pl.draftPool.length}）`);
+    ok(!!f1 && !!s1 && !!f3, '下一届首轮/次轮 + 最远年份首轮都存在');
+    const vF1 = pickValue(pl, f1!), vS1 = pickValue(pl, s1!), vF3 = pickValue(pl, f3!);
+    console.log(`  我的签估值：${pl.year + 1} 首轮 ${vF1} / ${pl.year + 1} 次轮 ${vS1} / ${pl.year + 3} 首轮 ${vF3}`);
+    console.log(`  签名示例：${pickLabel(pl, f1!)} · ${pickLabel(pl, s1!)}`);
+    ok(vS1 < vF1, '次轮签价值低于首轮签');
+    ok(vF3 < vF1, '越远的年份折价（不确定性折扣）');
+    // 战绩变化 → 同一枚签的价值随之变化
+    for (const t of pl.teams) { t.win = 41; t.loss = 41; }
+    pl.teams[10].win = 5; pl.teams[10].loss = 77;   // 摆烂队
+    pl.teams[11].win = 70; pl.teams[11].loss = 12;  // 争冠队
+    const pkWeak = pl.draftPool.find((pk) => pk.f === 10 && pk.round === 1 && pk.year === pl.year + 1)!;
+    const pkStrong = pl.draftPool.find((pk) => pk.f === 11 && pk.round === 1 && pk.year === pl.year + 1)!;
+    const vWeak = pickValue(pl, pkWeak), vStrong = pickValue(pl, pkStrong);
+    console.log(`  同期首轮签：摆烂队(5-77) ${vWeak} vs 争冠队(70-12) ${vStrong}`);
+    ok(vWeak > vStrong, '签的价值随该队战绩实时变化（摆烂队的签更值钱）');
+  }
+
+  // ---------- v2.3 真实球员位置修正 ----------
+  console.log('== v2.3 真实球员位置（主/副位置）==');
+  {
+    const rl = createRealLeague(seed + 4243);
+    const find = (n: string) => rl.teams.flatMap((t) => t.players).find((p) => p.name === n);
+    const jw = find('杰伦·威廉姆斯'), ac = find('亚历克斯·卡鲁索'), jt = find('杰森·塔图姆');
+    const lbj = find('勒布朗·詹姆斯'), jok = find('尼古拉·约基奇');
+    console.log(`  杰伦·威廉姆斯 ${jw?.pos}/${jw?.secPos} · 卡鲁索 ${ac?.pos}/${ac?.secPos} · 塔图姆 ${jt?.pos}/${jt?.secPos} · 詹姆斯 ${lbj?.pos}/${lbj?.secPos} · 约基奇 ${jok?.pos}/${jok?.secPos}`);
+    ok(jw?.pos === 'SF' && jw?.secPos === 'SG', `杰伦·威廉姆斯 = 小前/后卫（${jw?.pos}/${jw?.secPos}；此前被源数据错标为 C/PF）`);
+    ok(ac?.pos === 'SG' && ac?.secPos === 'PG', '卡鲁索 = 后场（SG/PG；此前被机械推导成 SF/PF）');
+    ok(jt?.pos === 'PF' && jt?.secPos === 'SF', '塔图姆保持前锋（PF/SF，未被误改）');
+    ok(lbj?.pos === 'PF' && lbj?.secPos === 'SF', '詹姆斯保持前锋（PF/SF）');
+    ok(jok?.pos === 'C' && jok?.secPos === 'PF', '约基奇保持中锋（C/PF）');
+    const ORDER = ['PG', 'SG', 'SF', 'PF', 'C'];
+    const all = rl.teams.flatMap((t) => t.players);
+    const bad = all.filter((p) => Math.abs(ORDER.indexOf(p.pos) - ORDER.indexOf(p.secPos)) !== 1);
+    ok(bad.length === 0, `真实名单主副位置全部相邻（异常 ${bad.length} 人）`);
+    // v2.3.0 位置深度均衡：每队每个位置 ≥2 人（否则该位置独苗会打满 48 分钟）
+    const thin: string[] = [];
+    for (const t of rl.teams) {
+      for (const pos of ORDER) {
+        const n = t.players.filter((p) => p.pos === pos).length;
+        if (n < 2) thin.push(`${t.abbr}-${pos}(${n})`);
+      }
+    }
+    ok(thin.length === 0, `每队五位置均 ≥2 人（异常：${thin.join(' ') || '无'}）`);
+  }
+
+  // ---------- v2.3.0 出手分配（球星战术地位 / 空间型内线三分） ----------
+  console.log('== v2.3.0 出手分配与球星产出 ==');
+  {
+    const sl = createRealLeague(seed + 4245);
+    sl.userTeamId = 0;
+    while (sl.day < sl.totalDays) simDay(sl);
+    const find = (n: string) => sl.teams.flatMap((t) => t.players).find((p) => p.name === n);
+    const line = (p: Player | undefined) => (p ? `${p.name} ${(p.stats.pts / Math.max(1, p.gp)).toFixed(1)}分/${(p.stats.fga / Math.max(1, p.gp)).toFixed(1)}次出手` : '?');
+    const wemby = find('维克托·文班亚马');
+    const doncic = find('卢卡·东契奇');
+    console.log(`  ${line(wemby)} · ${line(doncic)}`);
+    if (wemby) {
+      const g = Math.max(1, wemby.gp);
+      const ppg = wemby.stats.pts / g;
+      const fga = wemby.stats.fga / g;
+      const tpa = wemby.stats.tpa / g;
+      console.log(`  文班亚马：${ppg.toFixed(1)}分 / ${fga.toFixed(1)}次出手（三分 ${tpa.toFixed(1)} = ${(tpa / Math.max(1, fga) * 100).toFixed(0)}%）`);
+      ok(ppg >= 20 && ppg <= 31, `文班亚马场均得分接近真实（${ppg.toFixed(1)} 分；修复前 17.3）`);
+      ok(fga >= 16, `文班亚马出手数达到球队核心水平（${fga.toFixed(1)} 次；修复前 11.5）`);
+      ok(tpa >= 3, `空间型内线真的投三分（${tpa.toFixed(1)} 次；修复前 0.6）`);
+    }
+    // 队内第一人出手必须多于第二人（战术地位）
+    const sas = sl.teams.find((t) => t.abbr === 'SAS')!;
+    const byFga = [...sas.players].sort((a, b) => b.stats.fga / Math.max(1, b.gp) - a.stats.fga / Math.max(1, a.gp));
+    const top = byFga[0], second = byFga[1];
+    console.log(`  马刺出手榜：${top.name} ${(top.stats.fga / Math.max(1, top.gp)).toFixed(1)} > ${second.name} ${(second.stats.fga / Math.max(1, second.gp)).toFixed(1)}`);
+    ok(top.stats.fga / Math.max(1, top.gp) > second.stats.fga / Math.max(1, second.gp), '球队第一人出手数高于第二人（战术核心）');
+    // 无人打满全场（位置深度兜底生效）
+    const over = sl.teams.flatMap((t) => t.players).filter((p) => p.gp > 20 && p.stats.min / Math.max(1, p.gp) > 42);
+    ok(over.length === 0, `没有球员场均超过 42 分钟（异常 ${over.length} 人：${over.slice(0, 3).map((p) => p.name).join('、')}）`);
+  }
+
+  // ---------- v2.3 AI 主动报价（球员 + 选秀权） ----------
+  console.log('== v2.3 AI 主动报价 ==');
+  {
+    const al = createRealLeague(seed + 4244);
+    al.userTeamId = 0;
+    let made = 0;
+    for (let k = 0; k < 60 && al.tradeOffers.length < 3; k++) {
+      if (tryAITradeOfferToUser(al, mulberry32(seed + 9000 + k))) made++;
+    }
+    console.log(`  生成 ${made} 份报价（队列 ${al.tradeOffers.length}/3）`);
+    ok(made > 0, `AI 会主动向玩家报价（${made} 份）`);
+    ok(al.news.some((n) => n.includes('发来交易报价')), '报价同步写入球队动态');
+    if (al.tradeOffers.length >= 2) {
+      const of = al.tradeOffers[0];
+      console.log(`  样例：${of.note}`);
+      const before = al.teams[0].players.map((p) => p.id).join(',');
+      const res = acceptTradeOffer(al, of.id);
+      console.log(`  接受结果：${res.ok ? '✅' : '❌'} ${res.reason}`);
+      ok(res.ok, 'AI 报价可通过接受按钮直接成交（evaluateTrade 已预检）');
+      ok(al.teams[0].players.map((p) => p.id).join(',') !== before, '成交后玩家阵容发生变化');
+      ok(!al.tradeOffers.some((o) => o.id === of.id), '已处理的报价从队列移除');
+      const rest = al.tradeOffers[0];
+      rejectTradeOffer(al, rest.id);
+      ok(!al.tradeOffers.some((o) => o.id === rest.id), '拒绝后报价从队列移除');
+      ok(al.news.some((n) => n.includes('拒绝了')), '拒绝同步写入球队动态');
+    }
+  }
+
+  // ---------- v2.3.0 新秀榜（开档即可查看的下一届 80 人名单 + 体测数据） ----------
+  console.log('== v2.3.0 新秀榜与体测数据 ==');
+  {
+    const dl = createRealLeague(seed + 4246);
+    dl.userTeamId = 0;
+    const nd = dl.nextDraftClass ?? [];
+    ok(nd.length === 80, `开档即有下一届新秀名单（${nd.length} 人，随时可查看）`);
+    const missing = nd.filter((p) => !p.height || !p.weight || !p.wingspan || !p.age);
+    ok(missing.length === 0, `新秀体测数据齐全（身高/体重/臂展/年龄；缺失 ${missing.length} 人）`);
+    ok(nd.every((p) => (p.wingspan ?? 0) >= p.height), '新秀臂展不短于身高');
+    ok(nd.every((p) => (p.weight ?? 0) >= 150 && (p.weight ?? 0) <= 330), '新秀体重在合理区间（150-330 磅）');
+    const hot = [...nd].sort((a, b) => b.ovr - a.ovr)[0];
+    console.log(`  状元热门：${hot.name} ${hot.pos} ${hot.age}岁 身高 ${hot.height}in 体重 ${hot.weight}lb 臂展 ${hot.wingspan}in OVR${hot.ovr} 潜力${hot.potential}星`);
+    // 真实球员体测取自 2K 源数据
+    const allReal = dl.teams.flatMap((t) => t.players);
+    const wemby = allReal.find((p) => p.name === '维克托·文班亚马');
+    const caruso = allReal.find((p) => p.name === '亚历克斯·卡鲁索');
+    console.log(`  文班亚马：${wemby?.height}in / ${wemby?.weight}lb / 臂展 ${wemby?.wingspan}in · 卡鲁索：${caruso?.height}in / ${caruso?.weight}lb / 臂展 ${caruso?.wingspan}in`);
+    ok(wemby?.weight === 235 && wemby?.wingspan === 96, '真实球员体测取自 2K 源数据（文班 235 磅 / 臂展 8\'0"）');
+    ok(allReal.every((p) => p.weight && p.wingspan), '30 队球员全部有体重/臂展');
+    // 休赛期选秀沿用同一批人，随后生成新的下一届
+    const firstIds = nd.map((p) => p.id).join(',');
+    while (dl.day < dl.totalDays) simDay(dl);
+    beginOffseason(dl);
+    const used = dl.draft?.class ?? [];
+    ok(used.length > 0 && used.map((p) => p.id).join(',') === firstIds, '休赛期选秀沿用同一批新秀（玩家整个赛季可提前考察）');
+    ok(used.every((p) => p.weight && p.wingspan), '选秀池新秀同样带体测数据');
+    const nd2 = dl.nextDraftClass ?? [];
+    ok(nd2.length === 80 && nd2[0]?.id !== nd[0]?.id, `选秀开启后自动生成新的下一届名单（${nd2.length} 人）`);
+    ok(nd2.every((p) => p.weight && p.wingspan), '下一届新秀体测数据齐全');
+  }
+
+  // ---------- v2.3.0 乐透抽签 / Stepien 规则 / 新秀薪资阶位 ----------
+  console.log('== v2.3.0 选秀制度（乐透抽签 · Stepien · 新秀薪资）==');
+  {
+    // 乐透抽签：战绩最差不再稳拿状元
+    const ll = createRealLeague(seed + 4247);
+    ll.userTeamId = 0;
+    for (const t of ll.teams) { t.win = 41; t.loss = 41; }
+    ll.teams[5].win = 5; ll.teams[5].loss = 77;   // 最差
+    ll.teams[6].win = 12; ll.teams[6].loss = 70;
+    ll.teams[7].win = 20; ll.teams[7].loss = 62;
+    const runs = 400;
+    let worstFirst = 0;
+    const winners = new Set<number>();
+    for (let k = 0; k < runs; k++) {
+      const ord = lotteryOrder(ll, mulberry32(seed + 50000 + k));
+      if (ord[0] === 5) worstFirst++;
+      winners.add(ord[0]);
+      if (k === 0) console.log(`  样例签序：${ord.slice(0, 6).map((id) => ll.teams[id].abbr).join(' → ')} …（共 30 签）`);
+    }
+    const share = worstFirst / runs;
+    console.log(`  ${runs} 次抽签：最差队拿到状元 ${worstFirst} 次（${(share * 100).toFixed(1)}%，理论 14%）；状元分散在 ${winners.size} 支球队`);
+    ok(worstFirst > 0 && worstFirst < runs, '乐透抽签生效：最差战绩不再稳拿状元签');
+    ok(share > 0.07 && share < 0.25, `最差队状元概率接近理论 14%（实测 ${(share * 100).toFixed(1)}%）`);
+    ok(winners.size >= 3, `状元签会落在多支球队（${winners.size} 支）`);
+
+    // Stepien 规则：不能连续两年没有首轮签
+    const sl2 = createRealLeague(seed + 4248);
+    sl2.userTeamId = 0;
+    const myFirsts = sl2.draftPool.map((pk, i) => ({ pk, i })).filter((x) => x.pk.o === 0 && x.pk.round === 1);
+    console.log(`  我方首轮签年份：${myFirsts.map((x) => x.pk.year).join(' / ')}`);
+    const target = sl2.teams[1].players[0];
+    const vAll = evaluateTrade(sl2, 0, 1, [], [target.id], myFirsts.map((x) => x.i), []);
+    console.log(`  送出全部 ${myFirsts.length} 枚首轮：${vAll.accept ? '接受' : '拒绝'} — ${vAll.reason.slice(0, 56)}`);
+    ok(!vAll.accept && vAll.reason.includes('Stepien'), 'Stepien 规则拦截"连续两年没有首轮签"的交易');
+    const vOne = evaluateTrade(sl2, 0, 1, [], [target.id], [myFirsts[0].i], []);
+    console.log(`  只送出 ${myFirsts[0].pk.year} 一枚：${vOne.accept ? '接受' : '拒绝'} — ${vOne.reason.slice(0, 48)}`);
+    ok(!vOne.reason.includes('Stepien'), '只送一枚首轮不触发 Stepien 规则');
+
+    // 新秀薪资阶位（Rookie Scale）
+    console.log(`  首轮薪资阶位：1 号签 ${rookieScaleSalary(1)} 万 · 15 号 ${rookieScaleSalary(15)} 万 · 30 号 ${rookieScaleSalary(30)} 万`);
+    ok(rookieScaleSalary(1) === 1200 && rookieScaleSalary(30) === 200, '状元 1200 万 → 30 号秀 200 万');
+    ok(rookieScaleSalary(10) > rookieScaleSalary(20), '薪资随顺位递减');
+
+    // 选秀后新秀合同确实按阶位/底薪签订
+    const dl2 = createRealLeague(seed + 4249);
+    dl2.userTeamId = 0;
+    while (dl2.day < dl2.totalDays) simDay(dl2);
+    beginOffseason(dl2);
+    const classIds = new Set((dl2.draft?.class ?? []).map((p) => p.id));
+    const roundOf = new Map((dl2.draft?.order ?? []).map((pk, i) => [i, pk.round]));
+    void roundOf;
+    draftComplete(dl2);
+    const drafted = dl2.teams.flatMap((t) => t.players).filter((p) => classIds.has(p.id));
+    const maxSal = Math.max(0, ...drafted.map((p) => p.salary));
+    const minSal = Math.min(...drafted.map((p) => p.salary));
+    console.log(`  本届入队新秀 ${drafted.length} 人，年薪区间 ${minSal}-${maxSal} 万（状元签应为 ${rookieScaleSalary(1)} 万）`);
+    ok(drafted.length > 40, `选秀入队人数正常（${drafted.length} 人）`);
+    ok(maxSal === rookieScaleSalary(1), `状元签新秀拿阶位顶薪（${maxSal} 万）`);
+    ok(minSal >= 200, `最末位新秀也不低于底薪档（${minSal} 万）`);
+    ok(drafted.every((p) => p.contractYears >= 2 && p.contractYears <= 4), '新秀合同年限 2-4 年（首轮 4 年 / 次轮 2 年）');
+  }
 
   console.log('== 自定义轮换冒烟（v0.3.1）==');
   const ml = createLeague(seed + 77);
@@ -622,7 +841,7 @@ function run(): void {
   ok(oldClone.teams[0].players.every((p) => p.exp > 0), 'exp 回填');
   ok(oldClone.teams[0].players.every((p) => p.min === null && p.usage === null), 'min/usage 回填 null（自动）');
   ok(oldClone.teams.every((t) => t.initiator === 'PG'), 'initiator 回填 PG');
-  ok(oldClone.draftPool.length === 30, 'draftPool 回填 30 枚');
+  ok(oldClone.draftPool.length === 180 && oldClone.draftPool.every((pk) => pk.year && (pk.round === 1 || pk.round === 2)), 'draftPool 回填 180 枚（含年份/轮次）');
   ok(oldClone.teams[0].players[0].name === nameBefore, '虚构档名字不翻译（保持原样）');
   ok(oldClone.teams[0].players.every((p) => p.body && bodyKeys().every((k) => p.body[k] >= 25 && p.body[k] <= 99)), 'migrate 补身体属性（v4）');
   ok(oldClone.teams[0].players.every((p) => p.injury === null), 'migrate 补 injury=null（v4）');
@@ -767,7 +986,7 @@ function runReal(): void {
   migrateSave(clone);
   ok(clone.teams[0].players.some((p) => p.name === '杰森·塔图姆'), 'migrate 将英文名还原为中文');
   ok(clone.teams[0].players.every((p) => p.skills), 'migrate 补 18 项技能（真实球员按中文名重建）');
-  ok(clone.draftPool.length === 30, 'migrate 补 draftPool');
+  ok(clone.draftPool.length === 180, 'migrate 补 draftPool（180 枚）');
   ok(clone.teams[0].players.every((p) => p.min === null && p.usage === null), 'migrate 补 min/usage 默认值');
   ok(clone.teams[0].initiator === 'PG', 'migrate 补 initiator');
   const all = [...l.teams.flatMap((t) => t.players)];

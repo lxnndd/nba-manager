@@ -1,5 +1,5 @@
 // ============ 核心类型 ============
-import type { Attrs, BodyAttrs, LeagueState, Player, Pos, Skills18, Team, TeamStyleId, GameRef } from './types';
+import type { Attrs, BodyAttrs, DraftPick, LeagueState, PickRound, Player, Pos, Skills18, Team, TeamStyleId, GameRef } from './types';
 import { SAVE_VERSION } from './types';
 import { TEAMS, FIRST_NAMES, LAST_NAMES, FIRST_EN, LAST_EN, POS_ORDER } from './data';
 import { REAL_FA, REAL_ROSTER, type RealPlayerInfo } from './realRoster';
@@ -178,6 +178,55 @@ export function heightLabel(inches: number): string {
   return `${Math.round(inches * 2.54)}cm`;
 }
 
+// ---------- v2.3.0 体测数据（体重 / 臂展）----------
+// 真实球员由 2K 数据直接给出（weight: "235 lbs" / wingspan: "8'0\""）；
+// 虚构球员与新秀按身高 + 位置推定。
+export function weightFor(rng: Rng, pos: Pos, height: number, age: number): number {
+  const off = BODY_OFFSET[pos].strength;
+  const base = 160 + (height - 70) * 6 + off * 0.9 - (age <= 22 ? 8 : 0); // 年轻球员偏轻
+  return clamp(Math.round(base + gauss(rng) * 7), 150, 330);
+}
+
+export function wingspanFor(rng: Rng, pos: Pos, height: number): number {
+  const bonus = pos === 'C' || pos === 'PF' ? 2.2 : pos === 'SF' ? 1.8 : 1.2;
+  return clamp(Math.round(height + bonus + gauss(rng) * 1.5), height, height + 8);
+}
+
+// 展示层：体重 → kg、臂展 → cm
+export function weightLabel(lbs: number): string {
+  return `${Math.round(lbs * 0.4536)}kg`;
+}
+export function wingspanLabel(inches: number): string {
+  return `${Math.round(inches * 2.54)}cm`;
+}
+// 英制写法（鼠标悬浮提示用）：235 lbs / 8'0"
+export function lbsLabel(lbs: number): string {
+  return `${lbs} lbs`;
+}
+export function feetLabel(inches: number): string {
+  const ft = Math.floor(inches / 12);
+  const inch = inches % 12;
+  return `${ft}'${inch}"`;
+}
+
+// 旧存档补体测数据（确定性、幂等：不消耗 rng）
+export function ensureMeasure(p: Player): void {
+  if (p.weight != null && p.wingspan != null) return;
+  const rng = mulberry32((p.id + 1) * 7919 + p.height * 131 + p.age * 17 + p.pos.charCodeAt(0) * 31 + 3);
+  if (p.weight == null) p.weight = weightFor(rng, p.pos, p.height, p.age);
+  if (p.wingspan == null) p.wingspan = wingspanFor(rng, p.pos, p.height);
+}
+
+// ---------- v2.3.0 下一届选秀预测名单（80 人）----------
+// 开档即生成，常规赛/休赛期随时可查看（身高/体重/臂展/年龄/潜力）；
+// 休赛期选秀时直接作为本届新秀池消耗，随后重新生成下一届。
+export function makeNextDraftClass(seed: number, seq: { v: number }): Player[] {
+  const rng = mulberry32(seed * 5501 + 11); // 独立 rng 流：不扰动建档主随机序
+  const list = genDraftClass(rng);
+  for (const r of list) r.id = seq.v++;
+  return list;
+}
+
 export function attrKeys(): (keyof Attrs)[] {
   return ['three', 'mid', 'inside', 'ath', 'def', 'pas', 'reb'];
 }
@@ -255,11 +304,20 @@ export function genPlayer(
   const a = age ?? (young ? randInt(rng, 19, 22) : randInt(rng, 20, 34));
   const [hMin, hMax] = POS_HEIGHT[pos];
   const potRaw = ovr + randInt(rng, -4, 12); // 0-99 语义（映射到 1-10 星）
+  // v2.3.0：body/height 提前到 return 之前只为拿到身高算体重/臂展——rng 消耗顺序与原实现完全一致，
+  // 而体重/臂展走独立确定性流（不扰动主随机序，冻结基线不受影响）。
+  const body = genBody(rng, pos, a, ovr);
+  const height = randInt(rng, hMin, hMax);
+  const mRng = mulberry32(height * 7919 + a * 131 + pos.charCodeAt(0) * 31 + 7);
+  const weight = weightFor(mRng, pos, height, a);
+  const wingspan = wingspanFor(mRng, pos, height);
   return {
     id: idSeq ? idSeq.v++ : 0,
     name, pos, secPos: POS_SEC[pos], age: a, ovr, attrs, skills,
-    body: genBody(rng, pos, a, ovr),
-    height: randInt(rng, hMin, hMax),
+    body,
+    height,
+    weight,
+    wingspan,
     salary: salaryFor(ovr) * (young ? 0.85 : 1),
     contractYears: randInt(rng, 1, 4),
     potential: potentialToStar(potRaw),
@@ -347,6 +405,36 @@ export function createLeague(seed: number): LeagueState {
   return finishLeague(rng, teams, idSeq, seed, 2025, 'fictional');
 }
 
+// ---------- v2.3 选秀权池：每队每年 1 首轮 + 1 次轮，交易市场开放未来 3 年（滚动窗口） ----------
+export const PICK_YEARS = 3;
+export function freshPickPool(baseYear: number, teamCount: number): DraftPick[] {
+  const out: DraftPick[] = [];
+  for (let k = 1; k <= PICK_YEARS; k++) {
+    for (const round of [1, 2] as PickRound[]) {
+      for (let i = 0; i < teamCount; i++) out.push({ o: i, f: i, year: baseYear + k, round });
+    }
+  }
+  return out;
+}
+
+// 滚动窗口：保留 [year+1, year+3] 内已有签（含已交易的持有者），补足缺失的年份/轮次，丢弃过期签。幂等。
+export function rollPickPool(l: LeagueState): void {
+  const from = l.year + 1;
+  const to = l.year + PICK_YEARS;
+  const keep = l.draftPool.filter((pk) => pk.year >= from && pk.year <= to);
+  for (let y = from; y <= to; y++) {
+    for (const round of [1, 2] as PickRound[]) {
+      for (let i = 0; i < l.teams.length; i++) {
+        if (!keep.some((pk) => pk.year === y && pk.round === round && pk.f === i)) {
+          keep.push({ o: i, f: i, year: y, round });
+        }
+      }
+    }
+  }
+  keep.sort((a, b) => a.year - b.year || a.round - b.round || a.f - b.f);
+  l.draftPool = keep;
+}
+
 // ---------- 联赛公共收尾：赛程 + LeagueState ----------
 // v0.3.3：新档第一赛季即开放自由市场——建档时就把初始市场铺好
 //（真实名单 = 2K Free Agency 115 人；虚构 = 60 人随机池；休赛期另有保池逻辑）。
@@ -362,6 +450,8 @@ function finishLeague(rng: Rng, teams: Team[], idSeq: { v: number }, seed: numbe
       freeAgents.push(fa);
     }
   }
+  // v2.3.0 下一届新秀预测名单（开档即可查看；先分配 id，playerSeq 随后取最新值）
+  const nextDraftClass = makeNextDraftClass(seed, idSeq);
   return {
     version: SAVE_VERSION,
     seed,
@@ -387,7 +477,7 @@ function finishLeague(rng: Rng, teams: Team[], idSeq: { v: number }, seed: numbe
     awards: null,
     news: [],
     finalsAccum: [],
-    draftPool: teams.map((_, i) => ({ o: i, f: i })),
+    draftPool: freshPickPool(year, teams.length), // v2.3：未来 3 年 × 首轮/次轮（180 枚）
     // v2.0 自由市场 7 天窗口 + 季后赛淘汰弹窗标记 + 待处理事件
     faDay: 1,
     faOffers: [],
@@ -395,6 +485,10 @@ function finishLeague(rng: Rng, teams: Team[], idSeq: { v: number }, seed: numbe
     pendingEvents: [],
     // v2.1 选秀大会（休赛期开启时才生成）
     draft: null,
+    // v2.3 AI 主动报价队列
+    tradeOffers: [],
+    // v2.3.0 下一届新秀预测名单（80 人）
+    nextDraftClass,
   };
 }
 
@@ -409,6 +503,13 @@ function fromRealBody(b: [number, number, number, number, number, number, number
   return { strength: b[0], speed: b[1], stamina: b[2], vertical: b[3], agility: b[4], durability: b[5], hustle: b[6] };
 }
 
+// v2.3.0 体测数据：2K 源有 weight/wingspan 就直接用，缺失时按身高位置确定性推定
+function measOf(rp: RealPlayerInfo): { weight: number; wingspan: number } {
+  if (rp.wt && rp.ws) return { weight: rp.wt, wingspan: rp.ws };
+  const rng = mulberry32(rp.h * 7919 + rp.a * 131 + rp.p.charCodeAt(0) * 31 + 5);
+  return { weight: weightFor(rng, rp.p, rp.h, rp.a), wingspan: wingspanFor(rng, rp.p, rp.h) };
+}
+
 export function createRealLeague(seed: number): LeagueState {
   const rng = mulberry32(seed);
   usedNames = new Set();
@@ -421,7 +522,7 @@ export function createRealLeague(seed: number): LeagueState {
       id: idSeq.v++,
       name: rp.n,
       pos: rp.p,
-      secPos: POS_SEC[rp.p],
+      secPos: rp.q ?? POS_SEC[rp.p], // v2.3：用数据源给的第二位置（旧版按 POS_SEC 机械推导 → 卡鲁索曾变成 SF/PF）
       age: rp.a,
       ovr: rp.o,
       attrs: {
@@ -431,6 +532,7 @@ export function createRealLeague(seed: number): LeagueState {
       skills: fromRealSkills(rp.s),
       body: fromRealBody(rp.b),
       height: rp.h,
+      ...measOf(rp),
       salary: salaryFor(rp.o),
       contractYears: rp.c,
       potential: potentialToStar(rp.v),
@@ -598,8 +700,14 @@ export function genDraftClass(rng: Rng): Player[] {
     class80.push(p);
   }
   // v2.1：保证恰好 1 名总评 ≥80，但"未必是状元"——随机选一名新秀给 +3（80-83）
-  const lucky = Math.floor(rng() * 80);
+  // v2.3.0：天骄从"高实力区间"里选（此前 80 人完全等概率，会出现 OVR 80 却只有 3 星潜力的怪状元），
+  //         命中后潜力至少 7 星，让新秀榜的头部球员名副其实
+  const hotPool = class80.map((p, i) => ({ p, i })).filter((x) => x.p.ovr >= 72);
+  const lucky = hotPool.length
+    ? hotPool[Math.floor(rng() * hotPool.length)].i
+    : Math.floor(rng() * 80);
   class80[lucky].ovr = clamp(class80[lucky].ovr + 3, 80, 83);
+  class80[lucky].potential = Math.max(class80[lucky].potential, 7);
   return class80;
 }
 
@@ -629,7 +737,7 @@ export function realFaPlayer(id: number, rp: RealPlayerInfo): Player {
     id,
     name: rp.n,
     pos: rp.p,
-    secPos: POS_SEC[rp.p],
+    secPos: rp.q ?? POS_SEC[rp.p], // v2.3：数据源第二位置优先
     age: rp.a,
     ovr: rp.o,
     attrs: {
@@ -639,6 +747,7 @@ export function realFaPlayer(id: number, rp: RealPlayerInfo): Player {
     skills: fromRealSkills(rp.s),
     body: fromRealBody(rp.b),
     height: rp.h,
+    ...measOf(rp),
     salary: 0,
     contractYears: 0,
     potential: potentialToStar(rp.v),

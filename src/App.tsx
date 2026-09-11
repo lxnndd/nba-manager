@@ -8,10 +8,11 @@ import { RosterView } from './ui/RosterView';
 import { TradeView } from './ui/TradeView';
 import { FreeMarketView } from './ui/FreeMarketView';
 import { LeagueView } from './ui/LeagueView';
+import { DraftView } from './ui/DraftView';
 import { OffseasonView } from './ui/OffseasonView';
 import { beginOffseason } from './engine/offseason';
 
-type ViewKey = 'schedule' | 'roster' | 'trade' | 'market' | 'league';
+type ViewKey = 'schedule' | 'roster' | 'trade' | 'market' | 'league' | 'draft';
 
 const NAV: { key: ViewKey; label: string }[] = [
   { key: 'schedule', label: '🏀 赛程' },
@@ -19,6 +20,7 @@ const NAV: { key: ViewKey; label: string }[] = [
   { key: 'trade', label: '🤝 交易' },
   { key: 'market', label: '💼 自由市场' },
   { key: 'league', label: '📊 联盟' },
+  { key: 'draft', label: '🎓 新秀' },
 ];
 
 export default function App() {
@@ -61,7 +63,7 @@ export default function App() {
         <header className="topbar">
           <div className="tb-left">
             <span className="logo">🏀 NBA 经理</span>
-            <span className="version">v2.2.1</span>
+            <span className="version">v2.3.0</span>
           </div>
           <div className="tb-right">
             <span className="save-state">{saveClock}</span>
@@ -84,7 +86,7 @@ export default function App() {
       <header className="topbar">
         <div className="tb-left">
           <span className="logo">🏀 NBA 经理</span>
-          <span className="version">v2.2.1</span>
+          <span className="version">v2.3.0</span>
         </div>
         <nav className="tb-nav">
           {NAV.map((n) => (
@@ -109,6 +111,7 @@ export default function App() {
         {view === 'trade' && <TradeView api={api} />}
         {view === 'market' && <FreeMarketView api={api} />}
         {view === 'league' && <LeagueView api={api} />}
+        {view === 'draft' && <DraftView api={api} />}
       </main>
 
       {seasonOver && view !== 'schedule' && (

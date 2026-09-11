@@ -8,8 +8,8 @@
 //   → simulateOffseasonAI(各队补缺) → simulateAIOffseasonTrades(重建/争冠队互市)
 //   → finishOffseason(裁至 15、重置、开新赛季)。
 import type { LeagueState, Player, Pos, Team, Skills18, DraftPick } from './types';
-import { playoffChampion, sortRoster, applyTrade, evaluateTrade, tradeValue, pickValue, pickLabel, SALARY_CAP, TAX_LINE, HARD_CAP, ROSTER_MAX } from './league';
-import { genPlayer, genRookie, genFreeAgent, genDraftClass, realFaPlayer, makeSchedule, resetSeasonStats, salaryFor, STYLE_IDS, COACH_STYLE_IDS, SKILL_KEYS, SKILLS_OFFSET, calcOvr } from './gen';
+import { playoffChampion, sortRoster, applyTrade, evaluateTrade, tradeValue, pickValue, pickLabel, tryAITradeOfferToUser, lotteryOrder, rookieScaleSalary, SALARY_CAP, TAX_LINE, HARD_CAP, ROSTER_MAX } from './league';
+import { genPlayer, genRookie, genFreeAgent, genDraftClass, realFaPlayer, makeSchedule, resetSeasonStats, salaryFor, STYLE_IDS, COACH_STYLE_IDS, SKILL_KEYS, SKILLS_OFFSET, calcOvr, rollPickPool } from './gen';
 import { POS_ORDER } from './data';
 import { REAL_FA } from './realRoster';
 import { clamp, mulberry32, pick, randInt, shuffle, type Rng } from './rng';
@@ -245,14 +245,41 @@ export function beginOffseason(l: LeagueState): void {
 
   // v2.1 选秀大会（可操作版）：生成 80 人池 + 签序，进入 DraftState；
   // 处理进度由休赛期 UI / AI 代选推进（draftPickAuto / draftPickUser / draftComplete）。
+  // v2.3：本届选秀 = l.year + 1 那年的签（30 首轮 + 30 次轮）；首轮先选、次轮后选，各自按归属队战绩差排序。
+  const draftYear = l.year + 1;
   const rankOf = [...l.teams].sort((a, b) => winRateOf(a) - winRateOf(b) || a.abbr.localeCompare(b.abbr));
   const rank = (teamId: number) => rankOf.findIndex((t) => t.id === teamId);
-  const order = [...l.draftPool].sort((x, y) => rank(x.f) - rank(y.f) || x.o - y.o);
-  const draftClass = genDraftClass(rng);
-  for (const rookie of draftClass) rookie.id = l.playerSeq++; // 统一分配 id
-  l.draft = { class: draftClass, order, next: 0, picked: [] };
-  if (draftClass.some((p) => p.ovr >= 80)) {
-    addNews(l, `🎓 本届选秀 80 人已出炉（含 1 名 80+ 天骄，未必是状元）；${order.length} 枚首轮签按战绩差顺序挑选。`);
+  // v2.3.0 乐透抽签（独立 rng 流）：14 支乐透队按概率抽前 4 顺位，其余按战绩逆序
+  const lottoRng = mulberry32(l.seed * 4271 + l.season * 613 + 29);
+  const draftPosOrder = lotteryOrder(l, lottoRng);
+  const posOfTeam = (id: number) => {
+    const i = draftPosOrder.indexOf(id);
+    return i < 0 ? 99 : i;
+  };
+  const order = l.draftPool
+    .filter((pk) => pk.year === draftYear)
+    .sort((x, y) => {
+      if (x.round !== y.round) return x.round - y.round; // 首轮先选
+      // 首轮按乐透抽签顺位；次轮无乐透（纯按战绩逆序，与真实规则一致）
+      const d = x.round === 1 ? posOfTeam(x.f) - posOfTeam(y.f) : rank(x.f) - rank(y.f);
+      return d || x.o - y.o;
+    });
+  {
+    const top4 = draftPosOrder.slice(0, 4).map((id) => l.teams[id]?.abbr ?? '?').join(' → ');
+    addNews(l, `🎲 乐透抽签：${l.teams[draftPosOrder[0]]?.name ?? '?'} 抽中状元签（前四顺位 ${top4}）；其余乐透队按战绩逆序，非乐透队 15-30 顺位。`);
+  }
+  // v2.3.0：本届新秀 = 开档/上一休赛期就已生成的"预测名单"（玩家整个赛季都能提前考察这些人）
+  const draftClass = l.nextDraftClass?.length ? l.nextDraftClass : genDraftClass(rng);
+  for (const rookie of draftClass) if (!rookie.id || rookie.id <= 0) rookie.id = l.playerSeq++; // 统一分配 id
+  l.draft = { year: draftYear, class: draftClass, order, next: 0, picked: [] };
+  const nFirst = order.filter((pk) => pk.round === 1).length;
+  addNews(l, `🎓 ${draftYear} 年选秀 80 人已出炉（含 1 名 80+ 天骄，未必是状元）；${nFirst} 枚首轮 + ${order.length - nFirst} 枚次轮签按战绩差顺序挑选。`);
+  // 生成下一届预测名单（独立 rng 流：不扰动休赛期既有随机序）
+  {
+    const ndRng = mulberry32(l.seed * 5501 + l.season * 97 + 23);
+    const nextList = genDraftClass(ndRng);
+    for (const r of nextList) r.id = l.playerSeq++;
+    l.nextDraftClass = nextList;
   }
 
   // 自由球员池：真实名单首季已在建档时铺好 REAL_FA（v0.3.3 起开档即开放市场）；
@@ -282,6 +309,8 @@ export function beginOffseason(l: LeagueState): void {
   l.faOffers = [];
   l.poffExitShown = false;
   l.pendingEvents = [];
+  // v2.3：休赛期重新生成 AI 报价（上赛季遗留的报价跨季失效）
+  l.tradeOffers = [];
   // v2.1 成长自动分配：全员（含用户队）统一按"优先突出能力、单项 ≤90"自动加点
   for (const team of l.teams) {
     for (const p of team.players) if (p.points > 0) autoDistribute(rng, p);
@@ -306,26 +335,43 @@ export function draftRemaining(l: LeagueState): { current: DraftPick | null; tot
 
 // 把一名新秀分配给持有签的队（满 17 落选进 FA / 满 15 裁最弱冗余位 → 联盟人数守恒）
 function assignRookie(l: LeagueState, team: Team, rookie: Player): void {
+  const pick = l.draft!.order[l.draft!.next];
+  const pickNo = l.draft!.next + 1;
   const idx = l.draft!.class.indexOf(rookie);
   if (idx >= 0) l.draft!.class.splice(idx, 1);
   l.draft!.picked.push(rookie.id);
-  if (team.players.length >= ROSTER_MAX) {
-    rookie.salary = 0;
-    rookie.contractYears = 0;
-    l.freeAgents.push(rookie);
-    addNews(l, `🎓 第 ${l.draft!.next + 1} 顺位新秀 ${rookie.name} 因 ${team.name} 名单已满落选，进入自由市场。`);
+  // v2.3.0 新秀合同：首轮签按薪资阶位（Rookie Scale，状元 1200 万 → 30 号 200 万）签 4 年；
+  // 次轮签无固定薪资 → 底薪档（200-300 万）2 年（与真实规则一致）
+  if (pick && pick.round === 1) {
+    rookie.salary = rookieScaleSalary(pickNo);
+    rookie.contractYears = 4;
   } else {
-    if (team.players.length >= 15) {
-      const count = (pos: Pos) => team.players.filter((q) => q.pos === pos).length;
-      const weakest = [...team.players]
-        .filter((q) => count(q.pos) > 1)
-        .sort((a, b) => a.ovr - b.ovr)[0];
-      if (weakest) {
-        const wi = team.players.indexOf(weakest);
-        team.players.splice(wi, 1);
-        releasePlayer(l, weakest);
-      }
+    rookie.salary = clamp(salaryFor(rookie.ovr), 200, MIN_SALARY);
+    rookie.contractYears = 2;
+  }
+  if (team.players.length >= ROSTER_MAX) {
+    // v2.3.0：名单满员时也先裁掉最弱的冗余位置球员为新秀腾位（真实球队会给新秀机会），
+    // 只有当五个位置全是独苗（无人可裁）时才让新秀落选
+    const count = (pos: Pos) => team.players.filter((q) => q.pos === pos).length;
+    const weakest = [...team.players]
+      .filter((q) => count(q.pos) > 1)
+      .sort((a, b) => a.ovr - b.ovr)[0];
+    if (weakest) {
+      const wi = team.players.indexOf(weakest);
+      team.players.splice(wi, 1);
+      releasePlayer(l, weakest);
+      team.players.push(rookie);
+      addNews(l, `🎓 第 ${pickNo} 顺位新秀 ${rookie.name} 加盟 ${team.name}（为腾位裁掉 ${weakest.name}）。`);
+    } else {
+      rookie.salary = 0;
+      rookie.contractYears = 0;
+      l.freeAgents.push(rookie);
+      addNews(l, `🎓 第 ${pickNo} 顺位新秀 ${rookie.name} 因 ${team.name} 名单已满落选，进入自由市场。`);
     }
+  } else {
+    // v2.3.0：休赛期名单上限是 ROSTER_MAX(17)，选秀后直接扩编即可——
+    // 此前在 15 人就裁人，导致刚选中的新秀常被自己球队裁掉（一届 60 签只留下 36 人）；
+    // 开季前 finishOffseason 会统一裁到 15 人。
     team.players.push(rookie);
   }
   l.draft!.next++;
@@ -369,16 +415,19 @@ export function draftComplete(l: LeagueState): void {
   if (!d) return;
   let guard = 0;
   while (d.next < d.order.length && guard++ < 200) {
-    if (!draftPickAuto(l)) break; // 卡在用户签：代选兜底也允许（一键完成）
-    if (d.next < d.order.length && d.order[d.next].o === l.userTeamId) {
-      // 用户签由 AI 代选（"自动完成全部选秀"路径）
+    // ⚠️ v2.3.0 修复：此前 draftPickAuto 遇到"用户持有的签"返回 false 就直接 break，
+    // 导致「自动完成全部选秀」在轮到玩家签时提前收工——剩余签位全部变成落选秀
+    // （实测一届只签下 37 人、43 人莫名落选）。现在用户签改为在循环内直接代选。
+    if (d.order[d.next].o === l.userTeamId) {
       const pick = d.order[d.next];
       const team = l.teams[pick.o] ?? l.teams[l.userTeamId];
       const best = [...d.class].sort((a, b) => b.ovr - a.ovr)[0];
       if (!best) { d.next++; continue; }
       addNews(l, `🎓 第 ${d.next + 1} 顺位（${team.name}）：代选 ${best.name}（OVR ${best.ovr}）`);
       assignRookie(l, team, best);
+      continue;
     }
+    if (!draftPickAuto(l)) break; // AI 签（异常态兜底：无法推进时退出）
   }
   // 落选秀（池中剩余）→ 自由市场（报部分，防刷屏）
   const leftovers = [...d.class];
@@ -395,6 +444,9 @@ export function draftComplete(l: LeagueState): void {
     }
   }
   addNews(l, `📋 本届选秀共 80 人：${d.picked.length} 人获签，${leftovers.length} 名落选秀进入自由市场。`);
+  // v2.3：本届（year）的签已用完 → 移出选秀权池（滚动窗口在 finishOffseason 补齐最远年份）
+  const used = d.year;
+  l.draftPool = l.draftPool.filter((pk) => pk.year > used);
   l.draft = null;
   for (const team of l.teams) sortRoster(team);
 }
@@ -702,6 +754,11 @@ export function simulateAIOffseasonTrades(l: LeagueState): void {
     sortRoster(seller);
     deals++;
   }
+  // v2.3 休赛期 AI 也会向玩家报价（上限 3 份，独立 rng 流；玩家在休赛期界面接受或拒绝）
+  const offerRng = mulberry32(l.seed * 1607 + l.season * 811 + 19);
+  for (let k = 0; k < 3; k++) {
+    if (!tryAITradeOfferToUser(l, offerRng)) break;
+  }
 }
 
 // ---------- 第五步：结束休赛期（收尾名单至 15 / 重置数据 / 新赛程） ----------
@@ -783,6 +840,9 @@ export function finishOffseason(l: LeagueState): void {
   }
   l.offseason = false;
   l.offseasonStep = 0;
-  // 新赛季首轮签池重置：每队默认 1 枚（赛季中交易可改变持有者，下一个休赛期选秀生效）
-  l.draftPool = l.teams.map((_, i) => ({ o: i, f: i }));
+  // v2.3 选秀权滚动窗口：新赛季（year 已 +1）保留未来 3 年内的签（含已交易的持有者），
+  // 丢弃刚用完的那一届并补足最远年份（每队 1 首轮 + 1 次轮）
+  rollPickPool(l);
+  // v2.3 休赛期结束：清空 AI 报价队列（新赛季重新生成）
+  l.tradeOffers = [];
 }

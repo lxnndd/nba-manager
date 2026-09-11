@@ -158,6 +158,10 @@ async function main() {
   const ovrBadgeN = await ev(`document.querySelectorAll('.pick-list .pick-row .rc-ovr').length`);
   log(`   交易页tab=${r} 截止日误关闭=${tradeOpen} 头像行=${facesN} 能力值徽章=${ovrBadgeN}`);
   await shot('ui-smoke-7-trade');
+  // v2.3：选秀权（每队未来 3 年 × 首轮/次轮 = 6 枚，带年份标识）
+  const myPickRows = await ev(`document.querySelectorAll('.pick-list.picks .pick-row').length`);
+  const pickLabels = await ev(`[...document.querySelectorAll('.pick-list.picks .pick-row .pl-name')].map(e=>e.textContent).join(' | ')`);
+  log(`   我的选秀权 ${myPickRows} 枚（应 6）：${pickLabels}`);
   // v1.4：点击球员名字 → 打开完整详情（18 项技能 4 组）
   const clickName = await ev(`(()=>{const n=document.querySelector('.pick-list .pick-row .pl-name');if(n){n.click();return 'clicked'}return 'none'})()`);
   await sleep(400);
@@ -177,6 +181,28 @@ async function main() {
   log(`   自动预检：选我方=${selMe} 选对方=${selAi} verdict="${verdict.slice(0, 60)}" 确认按钮=${confirmBtn}`);
   await shot('ui-smoke-7-trade-precheck');
   await ev(`(()=>{const r=document.querySelectorAll('.trade-col .pick-row')[10];if(r)r.click();const r2=document.querySelectorAll('.trade-col:nth-child(2) .pick-row')[8];if(r2)r2.click();return 'cleared'})()`);
+
+  // 8.5) v2.3.0 新秀榜（常规赛期间即可查看下一届 80 人名单 + 身高/体重/臂展/年龄）
+  log('8.5 新秀榜（下一届新秀名单 + 体测数据）...');
+  const draftTab = await ev(`(()=>{const b=[...document.querySelectorAll('.tb-nav button')].find(x=>x.textContent.includes('新秀'));if(b){b.click();return 'clicked'}return 'none'})()`);
+  await sleep(500);
+  const boardRows = await ev(`document.querySelectorAll('.db-row').length`);
+  const boardHead = await ev(`document.querySelector('.db-head')?.textContent ?? ''`);
+  const firstRow = await ev(`document.querySelector('.db-row')?.textContent ?? ''`);
+  log(`   新秀榜: tab=${draftTab} 名单行数=${boardRows}（应 80）`);
+  log(`   表头: ${boardHead.trim()}`);
+  log(`   榜首: ${firstRow.trim()}`);
+  await shot('ui-smoke-8_5-draft-board');
+  await ev(`(()=>{const r=document.querySelector('.db-row');if(r)r.click();return 'ok'})()`);
+  await sleep(400);
+  const measLine = await ev(`document.querySelector('.player-modal .player-sub.meas')?.textContent ?? ''`);
+  log(`   新秀体测行: "${measLine.trim()}"`);
+  await shot('ui-smoke-8_5-draft-detail');
+  await closeModal();
+  await closeModal();
+  // 回到赛程页（后续步骤依赖赛程页按钮）
+  await ev(`(()=>{const b=[...document.querySelectorAll('.tb-nav button')].find(x=>x.textContent.includes('赛程'));if(b)b.click();return 'ok'})()`);
+  await sleep(300);
 
   // 9) 季后赛：快进常规赛 → 开始季后赛 → 模拟 → 对位图 + 系列弹窗
   log('9. 季后赛对位图（左右向中间）与逐场回看...');
@@ -251,6 +277,10 @@ async function main() {
   const status = await ev(`document.querySelector('.draft-status')?.textContent ?? ''`);
   const pickCards = await ev(`document.querySelectorAll('.draft-pick-card').length`);
   log(`   当前顺位="${status.trim()}" 可选新秀卡=${pickCards}（轮到玩家签时=80 池，否则 0）`);
+  // v2.3：本届选秀 = 60 签（30 首轮 + 30 次轮），面板标题会写明
+  const draftTitle = await ev(`document.querySelector('.draft-panel .sec-title')?.textContent ?? ''`);
+  const isSixty = /60 签/.test(draftTitle) && /30 首轮 \+ 30 次轮/.test(draftTitle);
+  log(`   选秀签结构: ${isSixty ? 'OK' : '异常'} — "${draftTitle.trim()}"`);
   await shot('ui-smoke-11-draft');
   const rAll = await clickBtn('自动完成全部选秀');
   log(`   自动完成全部选秀=${rAll}`);

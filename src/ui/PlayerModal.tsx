@@ -1,7 +1,7 @@
 // 球员详情弹窗（全局共用）：18 项技能面板 + 赛季数据 + 合同 + 定位（v2.0 潜力星/生涯/双位置）
 import type { Player, Team } from '../engine/types';
 import { perGame } from '../engine/league';
-import { heightLabel } from '../engine/gen';
+import { heightLabel, weightLabel, wingspanLabel, lbsLabel, feetLabel } from '../engine/gen';
 import { ATTR_CN, POS_CN, attrKeysOrder, money, ovrClass, ovrLabel, fmt1 } from './format';
 
 export function PlayerModal({
@@ -19,6 +19,12 @@ export function PlayerModal({
             <div className="player-name">{player.name}</div>
             <div className="player-sub">
               {team.abbr} · {POS_CN[player.pos]}/{POS_CN[player.secPos]} · {player.age}岁 · {heightLabel(player.height)} · 潜力 {player.potential} 星
+            </div>
+            {/* v2.3.0 体测数据（体重/臂展；旧档自动补全） */}
+            <div className="player-sub meas" title={`${feetLabel(player.height)}${player.weight ? ` · ${lbsLabel(player.weight)}` : ''}${player.wingspan ? ` · 臂展 ${feetLabel(player.wingspan)}` : ''}`}>
+              📏 体测：身高 {heightLabel(player.height)}
+              {player.weight ? ` · 体重 ${weightLabel(player.weight)}` : ''}
+              {player.wingspan ? ` · 臂展 ${wingspanLabel(player.wingspan)}` : ''}
             </div>
             <div className="player-sub dim">
               {player.nation !== '美国' ? `${player.nation} · ` : ''}NBA 第 {player.exp} 年 · 生涯 {c.gp} 场 {Math.round(c.pts)}分 {Math.round(c.reb)}板 {Math.round(c.ast)}助

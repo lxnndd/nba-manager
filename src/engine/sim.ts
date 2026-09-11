@@ -79,6 +79,29 @@ function scorePm(
   for (const p of defLine) box(def, p).pm -= pts;
 }
 
+// ---------- v2.3.0 队内战术地位（进攻第一/第二选择）----------
+// 真实 NBA 的进攻资源高度向核心集中（球队第一人 ~19-22 次出手，角色球员 ~8-11 次），
+// 而此前的权重只看位置与 OVR 线性值 → 全队出手过于平均（文班亚马 11.5 次 < 队友 13.6 次）。
+// 缓存 (队内人数 + 最高 OVR) 作签名，交易/成长后自动失效。
+const roleCache = new Map<number, { key: string; top: number; second: number }>();
+function coreBoost(team: Team, p: Player): number {
+  const maxOvr = team.players.reduce((m, q) => Math.max(m, q.ovr), 0);
+  const key = `${team.players.length}:${maxOvr}`;
+  let c = roleCache.get(team.id);
+  if (!c || c.key !== key) {
+    const sorted = [...team.players].sort((a, b) => b.ovr - a.ovr || a.id - b.id);
+    c = { key, top: sorted[0]?.id ?? -1, second: sorted[1]?.id ?? -1 };
+    roleCache.set(team.id, c);
+  }
+  // 系数标定依据（真实 2025-26 赛季场均得分 vs 引擎实测）：
+  //   文班亚马 24.3 → 24.9 · 塔图姆 26.8 → 27.0 · 库里 24.5 → 24.8 · 布克 25.6 → 24.3
+  //   字母哥 30.4 → 27.3 · 约基奇 29.6 → 25.9 · 爱德华兹 27.6 → 24.9
+  // （本引擎的回合模型比真实比赛更"平均主义"，需要用较高的集中度系数补偿）
+  if (p.id === c.top) return 2.5;
+  if (p.id === c.second) return 1.2;
+  return 1;
+}
+
 // ---------- 一次进攻 ----------
 function possession(
   rng: Rng,
@@ -92,9 +115,11 @@ function possession(
 ): void {
   // 持球人：组织能力 × 位置加权 × 能力权重（v2.2 前场 SF/PF/C 更多球权 + 能力球员更多球权；
   // 自定义球权权重与 PlayCall 发起人仍绝对优先）
-  const posW: Record<Pos, number> = { PG: 0.9, SG: 0.85, SF: 1.0, PF: 0.95, C: 0.85 };
-  // 能力球员获得更多球权（75 能力 = 1.0，90 = 1.18，60 = 0.82；clamp 0.70-1.30）
-  const ability = (p: Player) => clamp(1 + (p.ovr - 75) * 0.012, 0.7, 1.3);
+  // v2.3.0：位置差异进一步缩小、球星权重加大——此前 C 的 posW 只有 0.85，
+  // 导致文班亚马（OVR 97）这类内线核心持球份额被后卫挤占。
+  const posW: Record<Pos, number> = { PG: 0.95, SG: 0.9, SF: 1.0, PF: 1.0, C: 0.98 };
+  // 能力球员获得更多球权（75 能力 = 1.0，90 = 1.33，97 = 1.48，60 = 0.67；clamp 0.60-1.75）
+  const ability = (p: Player) => clamp(1 + (p.ovr - 75) * 0.022, 0.6, 1.75);
   const initPos = off.team.initiator;
   const usageCustom = offLine.some((p) => p.usage != null);
   const playCustom = usageCustom || initPos !== 'PG';
@@ -130,13 +155,16 @@ function possession(
   }
 
   // 出手者：持球人直接投，或传给队友（v2.2 前场接球倾向提升 + 能力加权）
+  // v2.3.0：C 的接球出手倾向由 0.8 提到 1.0（内线核心不再被位置压制成"队内第 3 选择"）
   let shooter: Player;
   if (rng() < 0.35) {
     shooter = handler;
   } else {
     const others = offLine.filter((p) => p !== handler);
-    const tend: Record<Pos, number> = { PG: 0.55, SG: 0.85, SF: 1.0, PF: 0.9, C: 0.8 };
-    const w2 = others.map((p) => tend[p.pos] * (0.8 + p.attrs.three / 180) * ability(p));
+    const tend: Record<Pos, number> = { PG: 0.7, SG: 0.9, SF: 1.0, PF: 1.0, C: 1.0 };
+    // v2.3.0：出手权按「位置倾向 × 投射威胁 × 能力^1.4」分配——此前能力只线性加权，
+    // 导致球星级内线与角色球员出手数几乎一样（文班亚马 11.5 次 < 队友瓦塞尔 13.6 次）。
+    const w2 = others.map((p) => tend[p.pos] * (0.8 + p.attrs.three / 180) * Math.pow(ability(p), 1.4) * coreBoost(off.team, p));
     const s2 = w2.reduce((a, b) => a + b, 0);
     let rr = rng() * s2; let oi = 0;
     for (let i = 0; i < others.length; i++) { rr -= w2[i]; if (rr <= 0) { oi = i; break; } }
@@ -144,11 +172,17 @@ function possession(
   }
 
   // 投篮类型概率：三分 / 内线 / 中投（现代三分时代）
-  const pos3: Record<Pos, number> = { PG: 0.56, SG: 0.61, SF: 0.46, PF: 0.23, C: 0.1 };
+  // v2.3.0：三分倾向改为「位置基准 + 个人三分能力」共同决定（此前纯位置表：
+  //   C 固定 0.1 → 文班亚马/约基奇这类空间型内线几乎不出手三分，得分被严重低估：
+  //   实测文班三分出手占比仅 5%，而真实约 40%）。
+  //   pull = 三分能力相对于联盟均值（45-77 区间）的拉满程度。
+  const p3Base: Record<Pos, number> = { PG: 0.38, SG: 0.40, SF: 0.30, PF: 0.14, C: 0.08 };
+  const p3Max: Record<Pos, number> = { PG: 0.66, SG: 0.68, SF: 0.62, PF: 0.52, C: 0.48 };
   const posIn: Record<Pos, number> = { PG: 0.12, SG: 0.13, SF: 0.28, PF: 0.6, C: 0.76 };
-  let p3 = pos3[shooter.pos] + (shooter.attrs.three - 70) * 0.0035;
+  const pull = clamp((shooter.attrs.three - 45) / 32, 0, 1);
+  let p3 = p3Base[shooter.pos] + (p3Max[shooter.pos] - p3Base[shooter.pos]) * pull;
   if (shooter === handler) p3 *= 0.82; // 持球干拔三分更少
-  p3 = clamp(p3, 0.01, 0.6);
+  p3 = clamp(p3, 0.02, 0.72);
   const pIn = clamp(posIn[shooter.pos] + (shooter.attrs.inside - 70) * 0.003, 0.05, 0.88);
 
   let shotType: 'three' | 'mid' | 'inside';
@@ -328,6 +362,22 @@ function available(list: Player[]): Player[] {
   return list.filter((p) => !(p.injury && p.injury.games > 0));
 }
 
+// v2.3.0：该位置可用球员不足 2 人时（交易/伤病后只剩独苗）从相邻位置借人补位，
+// 否则那名球员会打满 48 分钟（真实名单湖人 PG 只有东契奇一人时曾出现"场均 48 分钟、38 分"）。
+// 正常球队（每位置 ≥2 人）行为完全不变。
+const ADJ_POS: Record<Pos, Pos[]> = {
+  PG: ['SG', 'SF'], SG: ['PG', 'SF'], SF: ['SG', 'PF'], PF: ['SF', 'C'], C: ['PF', 'SF'],
+};
+function depthList(team: Team, pos: Pos, taken?: Set<number>): Player[] {
+  const own = available(posDepth(team, pos)).filter((p) => !taken?.has(p.id));
+  if (own.length >= 2) return own;
+  for (const adj of ADJ_POS[pos]) {
+    const extra = available(posDepth(team, adj)).filter((p) => !taken?.has(p.id) && !own.includes(p));
+    if (extra.length) return [...own, ...extra];
+  }
+  return own;
+}
+
 export function manualRotation(team: Team): boolean {
   return team.players.some((p) => p.min != null);
 }
@@ -360,8 +410,9 @@ function sideLineup(team: Team, minute: number, diff: number, lines?: Map<number
   const garbage = Math.abs(diff) >= 14 && minute >= 40;
   if (manualRotation(team)) {
     const out: Player[] = [];
+    const taken = new Set<number>();
     for (const pos of ['PG', 'SG', 'SF', 'PF', 'C'] as Pos[]) {
-      const list = available(posDepth(team, pos));
+      const list = depthList(team, pos, taken);
       if (!list.length) continue;
       let pool = list;
       if (garbage) {
@@ -387,13 +438,15 @@ function sideLineup(team: Team, minute: number, diff: number, lines?: Map<number
         }
       }
       out.push(best ?? list[0]);
+      taken.add((best ?? list[0]).id);
     }
     return out;
   }
   const positions: Pos[] = ['PG', 'SG', 'SF', 'PF', 'C'];
   const out: Player[] = [];
+  const taken = new Set<number>();
   for (const pos of positions) {
-    const list = available(posDepth(team, pos));
+    const list = depthList(team, pos, taken);
     let pick: Player | undefined;
     const w = restWindow(pos, minute);
     if (w < 0) pick = list[0];
@@ -403,7 +456,7 @@ function sideLineup(team: Team, minute: number, diff: number, lines?: Map<number
       pick = list[gIdx];
     }
     if (!pick && list.length) pick = list[0];
-    if (pick) out.push(pick);
+    if (pick) { out.push(pick); taken.add(pick.id); }
   }
   return out;
 }
