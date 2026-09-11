@@ -330,13 +330,14 @@ faDay/faOffers/poffExitShown/pendingEvents/draft。新档为幂等 no-op。
    + 3s 清理循环兜底；检查四路径：`nba-manager`、`release`、`release\win-unpacked`、`Desktop`（过滤 `*SystemDrive*`）。
 7. **git / gh（本机）**：已用 winget 安装 Git 2.55 与 gh 2.100；PATH 需从 Machine+User 刷新：
    `$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')`。
-   **GitHub 直连被墙**（20.205.243.166 超时）→ 本机代理 `127.0.0.1:7897`：
-   - gh：命令前设 `$env:HTTPS_PROXY='http://127.0.0.1:7897'`（可加 HTTP_PROXY）
-   - git：仓库级已配 `git config http.proxy http://127.0.0.1:7897`
-   - 认证：`gh auth login --hostname github.com --git-protocol https --web`（设备码：浏览器打开
-     https://github.com/login/device 输入码；**不加代理会失败**）。账号 `lxnndd`，凭据在 keyring。
+   **GitHub 连接状态会变**（GitHub 直连时常被墙；本机代理常见端口 `127.0.0.1:7897`，但代理软件可能随时关闭）：
+   - 先判断：`Test-NetConnection 127.0.0.1 -Port 7897`（代理是否活着）、`Test-NetConnection github.com -Port 443`（直连是否通）
+   - 走代理时：`gh` 需在命令前设 `$env:HTTPS_PROXY='http://127.0.0.1:7897'`；`git` 用 `git -c http.proxy=http://127.0.0.1:7897 push`（或用完即 `git config --unset http.proxy` 恢复直连）
+   - 认证：`gh auth login --hostname github.com --git-protocol https --web`（浏览器打开 https://github.com/login/device 输入设备码）。账号 `lxnndd`，凭据已在 keyring。
    - 仓库：`https://github.com/lxnndd/nba-manager`（**私有**）；改公开：`gh repo edit lxnndd/nba-manager --visibility public`
-   - 推送：`git add -A && git commit -m "..." && git push`
+   - **当前状态（截至本档案编写）**：本地已有 2 个提交（`489b3b7` 源码、`abf7537` 本档案），
+     `origin` 已配置但**尚未推送最新提交**（用户指示"先不管 GitHub，有需要再连接"）。
+     需要时执行：`git push`（若失败，按上面步骤判断代理/直连）。
 8. **打包注意**：`build.win.signAndEditExecutable = false`（winCodeSign 符号链接解压失败，勿改）；
    `portable.artifactName = "NBA-Manager-${version}.exe"`；**严禁对 portable exe 用 rcedit**（会丢 NSIS overlay 变 53KB 损坏）；
    exe 图标由 `build/icon.png`（篮球）在 makensis 编译期嵌入。打包前必须杀掉旧实例，否则 electron-builder 占用失败。
