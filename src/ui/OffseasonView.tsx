@@ -6,13 +6,14 @@ import type { Player } from '../engine/types';
 import {
   MIN_SALARY, MID_LEVEL, askFor, payrollOf, settleFreeAgency,
   simulateOffseasonAI, simulateAIOffseasonTrades, finishOffseason, cutPlayer,
-  draftPickAuto, draftPickUser, draftComplete, draftIsUserTurn, draftRemaining,
+  draftPickAuto, draftPickUser, draftComplete, draftIsUserTurn, draftRemaining, draftFastToUserPick,
   type FaResult,
 } from '../engine/offseason';
 import { SALARY_CAP, TAX_LINE, ROSTER_MAX } from '../engine/league';
-import { TEAM_STYLES, COACH_STYLES, applyTeamStyle, applyCoachStyle } from '../engine/gen';
+import { TEAM_STYLES, COACH_STYLES, applyTeamStyle, applyCoachStyle, heightLabel, weightLabel, wingspanLabel } from '../engine/gen';
 import { money, ovrClass, POS_CN } from './format';
 import { PlayerFace } from './PlayerFace';
+import { TeamLogo } from './TeamLogo';
 import { TradeOffersPanel } from './TradeOffersPanel';
 import type { GameApi } from './useGame';
 
@@ -36,9 +37,20 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
     api.tick();
   };
 
-  // 选秀操作（v2.1：玩家持有的签可手动挑选）
+  // 选秀操作（v2.1：玩家持有的签可手动挑选；v2.4.0：快进到我的签 + 选中前确认）
+  const [pendingRookie, setPendingRookie] = useState<Player | null>(null);
+  const [draftMsg, setDraftMsg] = useState<string | null>(null);
   const draftAutoOne = () => {
     draftPickAuto(l);
+    api.tick();
+  };
+  // v2.4.0：一键快进到"我持有的签"（中间的 AI 签全部代选）
+  const draftFastToMine = () => {
+    const steps = draftFastToUserPick(l);
+    setPendingRookie(null);
+    setDraftMsg(steps > 0
+      ? `已快进 ${steps} 个 AI 签位${draftIsUserTurn(l) ? '，轮到你的签了！' : '（选秀已结束）'}`
+      : (draftIsUserTurn(l) ? '已经轮到你的签了' : '没有你的签位了'));
     api.tick();
   };
   const draftUserAuto = () => {
@@ -47,14 +59,18 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
       const best = [...d.class].sort((a, b) => b.ovr - a.ovr)[0];
       if (best) draftPickUser(l, best.id);
     }
+    setPendingRookie(null);
     api.tick();
   };
   const draftUserPick = (pid: number) => {
     draftPickUser(l, pid);
+    setPendingRookie(null);
+    setDraftMsg(null);
     api.tick();
   };
   const draftAll = () => {
     draftComplete(l);
+    setPendingRookie(null);
     api.tick();
   };
 
@@ -169,6 +185,37 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
           </div>
           {draft && (
             <div className="draft-panel">
+              {/* v2.4.0 乐透抽签可视化展示（此前只有一行文字播报） */}
+              {l.lottery && l.lottery.year === draft.year && (
+                <div className="lottery-panel">
+                  <div className="sec-title">🎲 {l.lottery.year} 年乐透抽签结果（14 支乐透队）</div>
+                  <div className="lottery-grid">
+                    {l.lottery.order.slice(0, 14).map((tid, i) => {
+                      const t = l.teams[tid];
+                      const odd = l.lottery!.odds[i] ?? 0;
+                      const isTop4 = i < 4;
+                      const isMine = tid === l.userTeamId;
+                      return (
+                        <div className={`lottery-row ${isTop4 ? 'top4' : ''} ${isMine ? 'mine' : ''}`} key={tid}
+                          title={`${t.city} ${t.name}：抽签前状元概率 ${(odd * 100).toFixed(1)}%，最终第 ${i + 1} 顺位`}>
+                          <span className="lo-pick">{i + 1}</span>
+                          <TeamLogo abbr={t.abbr} size="xs" />
+                          <span className="lo-team">{t.abbr}{isMine ? ' ★' : ''}</span>
+                          <span className="lo-odds">
+                            <span className="lo-bar" style={{ width: `${Math.min(100, (odd / 0.14) * 100)}%` }} />
+                            <span className="lo-odd-text">{(odd * 100).toFixed(1)}%</span>
+                          </span>
+                          <span className="lo-record">{t.win}-{t.loss}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="dim lottery-note">
+                    前 4 顺位由抽签决定（战绩最差 3 队各 14% 概率，其后依次递减），
+                    其余乐透队按战绩逆序、非乐透队 15-30 顺位；条形长度 = 抽签前的状元概率。
+                  </div>
+                </div>
+              )}
               <div className="sec-title">🎓 {draft.year} 年选秀大会（共 {draft.order.length} 签：30 首轮 + 30 次轮 · 池内剩余 {draft.class.length} 人）</div>
               <div className="draft-status">
                 {curPick
@@ -179,11 +226,40 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
                 <>
                   <div className="btn-row">
                     <button className="btn sm" onClick={draftUserAuto}>🤖 AI 代选（最高 OVR）</button>
-                    <span className="dim">轮到你的签！从下方池子点击挑选新秀</span>
+                    <span className="dim">轮到你的签！从下方池子选人（点一下先看资料，确认后才算选中）</span>
                   </div>
+                  {/* v2.4.0：选中前确认——点卡片只是"选中查看"，右侧显示体测/技能摘要，确认后才真正选走 */}
+                  {pendingRookie && (
+                    <div className="draft-confirm">
+                      <div className="dc-head">
+                        <PlayerFace p={pendingRookie} size="sm" />
+                        <span className={`ovr-badge ${ovrClass(pendingRookie.ovr)}`}>{pendingRookie.ovr}</span>
+                        <div className="dc-info">
+                          <div className="dc-name">{pendingRookie.name}</div>
+                          <div className="dc-meta">
+                            {POS_CN[pendingRookie.pos]} · {pendingRookie.age}岁 · 潜力 {pendingRookie.potential} 星
+                            {' · '}{heightLabel(pendingRookie.height)}
+                            {pendingRookie.weight ? ` · ${weightLabel(pendingRookie.weight)}` : ''}
+                            {pendingRookie.wingspan ? ` · 臂展 ${wingspanLabel(pendingRookie.wingspan)}` : ''}
+                            {pendingRookie.nation !== '美国' ? ` · ${pendingRookie.nation}` : ''}
+                          </div>
+                          <div className="dc-skills">
+                            三分 {pendingRookie.skills.three} · 篮下 {pendingRookie.skills.layup} · 控球 {pendingRookie.skills.handle}
+                            {' · '}外线防守 {pendingRookie.skills.perimeter} · 篮板 {pendingRookie.skills.dr} · 速度 {pendingRookie.skills.speed}
+                          </div>
+                        </div>
+                        <div className="btn-row">
+                          <button className="btn primary" onClick={() => draftUserPick(pendingRookie.id)}>✓ 确认选中</button>
+                          <button className="btn" onClick={() => setPendingRookie(null)}>再看看</button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div className="draft-pool">
                     {draftPoolSorted.map((p) => (
-                      <button key={p.id} className="draft-pick-card" onClick={() => draftUserPick(p.id)} title={`${p.pos} · OVR ${p.ovr} · ${p.age}岁 · 潜 ${p.potential}星`}>
+                      <button key={p.id} className={`draft-pick-card ${pendingRookie?.id === p.id ? 'pending' : ''}`}
+                        onClick={() => setPendingRookie(p)}
+                        title={`${p.pos} · OVR ${p.ovr} · ${p.age}岁 · 潜 ${p.potential}星（点击查看后再确认选中）`}>
                         <PlayerFace p={p} size="xs" />
                         <span className={`ovr-badge sm ${ovrClass(p.ovr)}`}>{p.ovr}</span>
                         <span className="dp-name">{p.name}</span>
@@ -195,11 +271,13 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
                 </>
               ) : (
                 <div className="btn-row">
-                  <button className="btn" onClick={draftAutoOne}>▶ 进行下一签（AI 自动）</button>
-                  <button className="btn primary" onClick={draftAll}>⏩ 自动完成全部选秀</button>
-                  <span className="dim">玩家签会在轮到时暂停，等你亲自挑选</span>
+                  <button className="btn primary" onClick={draftFastToMine}>⏩ 快进到我的选秀</button>
+                  <button className="btn" onClick={draftAutoOne}>▶ 进行下一签</button>
+                  <button className="btn" onClick={draftAll}>⏩⏩ 自动完成全部选秀</button>
+                  <span className="dim">中间由 AI 代选，轮到你持有的签会自动停下</span>
                 </div>
               )}
+              {draftMsg && <div className="verdict ok" style={{ marginTop: 6 }}>{draftMsg}</div>}
             </div>
           )}
           <div className="btn-row">

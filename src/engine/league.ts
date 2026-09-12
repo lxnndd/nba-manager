@@ -540,6 +540,8 @@ export function migrateSave(l: LeagueState): void {
   }));
   // v2.3：选秀状态补年份（旧档休赛期进行中 → 用下一届年份）
   if (l.draft && (l.draft as { year?: number }).year == null) l.draft.year = l.year + 1;
+  // v2.4.0：乐透抽签结果（旧档无 → null，下次休赛期重新抽）
+  l.lottery = l.lottery ?? null;
   // v2.3.0：下一届新秀预测名单（旧档补建）+ 体测数据（体重/臂展）补全
   l.nextDraftClass = l.nextDraftClass ?? [];
   if (l.nextDraftClass.length === 0) {
@@ -624,8 +626,8 @@ export function pickValue(l: LeagueState, pick: DraftPick): number {
 // 状元概率：最差 3 队各 14%，其后依次 12.5 / 10.5 / 9.5 / 8.6 / 7.5 / 6.4 / 5.5 / 4.5 / 3.2 / 2.4 / 1.8%。
 export const LOTTERY_ODDS = [0.14, 0.14, 0.14, 0.125, 0.105, 0.095, 0.086, 0.075, 0.064, 0.055, 0.045, 0.032, 0.024, 0.018];
 
-// 返回 30 队的选秀顺位序列（下标 = 顺位，值 = 球队 id；用于判定"签的原始归属队"该排第几）
-export function lotteryOrder(l: LeagueState, rng: Rng): number[] {
+// 返回 30 队的选秀顺位序列 + 每队的状元概率（供 UI 可视化展示）
+export function lotteryDraw(l: LeagueState, rng: Rng): { order: number[]; odds: number[]; lotteryIds: number[] } {
   const wr = (t: Team) => t.win / Math.max(1, t.win + t.loss);
   const ranked = [...l.teams].sort((a, b) => wr(a) - wr(b) || a.abbr.localeCompare(b.abbr));
   const st = standings(l);
@@ -633,6 +635,8 @@ export function lotteryOrder(l: LeagueState, rng: Rng): number[] {
   for (const r of [...st.east.slice(0, 8), ...st.west.slice(0, 8)]) playoffIds.add(r.team.id);
   const lottery = ranked.filter((t) => !playoffIds.has(t.id));
   const rest = ranked.filter((t) => playoffIds.has(t.id));
+  const oddsOf = new Map<number, number>();
+  lottery.forEach((t, i) => oddsOf.set(t.id, LOTTERY_ODDS[i] ?? 0.005));
   const pool = lottery.map((t, i) => ({ id: t.id, w: LOTTERY_ODDS[i] ?? 0.005 }));
   const top: number[] = [];
   for (let k = 0; k < 4 && pool.length > 0; k++) {
@@ -646,7 +650,17 @@ export function lotteryOrder(l: LeagueState, rng: Rng): number[] {
     top.push(pool[idx].id);
     pool.splice(idx, 1);
   }
-  return [...top, ...pool.map((x) => x.id), ...rest.map((t) => t.id)];
+  const order = [...top, ...pool.map((x) => x.id), ...rest.map((t) => t.id)];
+  return {
+    order,
+    odds: order.map((id) => oddsOf.get(id) ?? 0),
+    lotteryIds: lottery.map((t) => t.id),
+  };
+}
+
+// 兼容旧调用：只取顺位序列
+export function lotteryOrder(l: LeagueState, rng: Rng): number[] {
+  return lotteryDraw(l, rng).order;
 }
 
 // v2.3.0 Stepien 规则：不能连续两年没有首轮签。

@@ -8,7 +8,7 @@
 //   → simulateOffseasonAI(各队补缺) → simulateAIOffseasonTrades(重建/争冠队互市)
 //   → finishOffseason(裁至 15、重置、开新赛季)。
 import type { LeagueState, Player, Pos, Team, Skills18, DraftPick } from './types';
-import { playoffChampion, sortRoster, applyTrade, evaluateTrade, tradeValue, pickValue, pickLabel, tryAITradeOfferToUser, lotteryOrder, rookieScaleSalary, SALARY_CAP, TAX_LINE, HARD_CAP, ROSTER_MAX } from './league';
+import { playoffChampion, sortRoster, applyTrade, evaluateTrade, tradeValue, pickValue, pickLabel, tryAITradeOfferToUser, lotteryDraw, rookieScaleSalary, SALARY_CAP, TAX_LINE, HARD_CAP, ROSTER_MAX } from './league';
 import { genPlayer, genRookie, genFreeAgent, genDraftClass, realFaPlayer, makeSchedule, resetSeasonStats, salaryFor, STYLE_IDS, COACH_STYLE_IDS, SKILL_KEYS, SKILLS_OFFSET, calcOvr, rollPickPool } from './gen';
 import { POS_ORDER } from './data';
 import { REAL_FA } from './realRoster';
@@ -251,11 +251,14 @@ export function beginOffseason(l: LeagueState): void {
   const rank = (teamId: number) => rankOf.findIndex((t) => t.id === teamId);
   // v2.3.0 乐透抽签（独立 rng 流）：14 支乐透队按概率抽前 4 顺位，其余按战绩逆序
   const lottoRng = mulberry32(l.seed * 4271 + l.season * 613 + 29);
-  const draftPosOrder = lotteryOrder(l, lottoRng);
+  const draw = lotteryDraw(l, lottoRng);
+  const draftPosOrder = draw.order;
   const posOfTeam = (id: number) => {
     const i = draftPosOrder.indexOf(id);
     return i < 0 ? 99 : i;
   };
+  // v2.4.0：保存抽签结果供休赛期界面可视化展示（概率 + 顺位 + 前 4 高亮）
+  l.lottery = { year: draftYear, order: draw.order, odds: draw.odds, top4: draw.order.slice(0, 4) };
   const order = l.draftPool
     .filter((pk) => pk.year === draftYear)
     .sort((x, y) => {
@@ -379,8 +382,7 @@ function assignRookie(l: LeagueState, team: Team, rookie: Player): void {
 }
 
 // AI 代选：签序下一个签 → 池中剩余最高 OVR 新秀（若下一签属于用户则跳过，返回 false）
-export function draftPickAuto(l: LeagueState): boolean {
-  const d = l.draft;
+export function draftPickAuto(l: LeagueState): boolean {  const d = l.draft;
   if (!d || d.next >= d.order.length) return false;
   if (d.order[d.next].o === l.userTeamId) return false; // 轮到玩家：等玩家选
   const pick = d.order[d.next];
@@ -392,6 +394,18 @@ export function draftPickAuto(l: LeagueState): boolean {
   addNews(l, `🎓 第 ${pickNo} 顺位（${team.name}${team.abbr !== l.teams[pick.f]?.abbr ? ` · ${l.teams[pick.f].abbr} 的签` : ''}）：选中 ${best.name}（${best.pos} · OVR ${best.ovr}${best.nation !== '美国' ? ` · ${best.nation}` : ''}）`);
   assignRookie(l, team, best);
   return true;
+}
+
+// v2.4.0 快进到玩家持有的签：AI 依次代选，直到轮到玩家（或选秀结束）。返回跳过的签数。
+export function draftFastToUserPick(l: LeagueState): number {
+  const d = l.draft;
+  if (!d) return 0;
+  let steps = 0;
+  while (d.next < d.order.length && !draftIsUserTurn(l) && steps < 200) {
+    if (!draftPickAuto(l)) break;
+    steps++;
+  }
+  return steps;
 }
 
 // 玩家为用户队持有的签挑选新秀
@@ -430,19 +444,23 @@ export function draftComplete(l: LeagueState): void {
     if (!draftPickAuto(l)) break; // AI 签（异常态兜底：无法推进时退出）
   }
   // 落选秀（池中剩余）→ 自由市场（报部分，防刷屏）
+  // v2.4.0：改为替换新数组——push 就地修改不会改变引用，UI 的 useMemo 依赖不会失效，
+  // 玩家会以为"落选秀没进自由市场"（实际进了但列表不刷新）
   const leftovers = [...d.class];
   let reported = 0;
+  const added: Player[] = [];
   for (const rookie of leftovers) {
     rookie.salary = 0;
     rookie.contractYears = 0;
     rookie.gp = 0;
     rookie.starts = 0;
-    l.freeAgents.push(rookie);
+    added.push(rookie);
     if ((rookie.ovr >= 72) && reported < 8) {
       addNews(l, `🎓 落选秀 ${rookie.name}（${rookie.pos} · OVR ${rookie.ovr}${rookie.nation !== '美国' ? ` · ${rookie.nation}` : ''}）进入自由市场。`);
       reported++;
     }
   }
+  if (added.length) l.freeAgents = [...l.freeAgents, ...added];
   addNews(l, `📋 本届选秀共 80 人：${d.picked.length} 人获签，${leftovers.length} 名落选秀进入自由市场。`);
   // v2.3：本届（year）的签已用完 → 移出选秀权池（滚动窗口在 finishOffseason 补齐最远年份）
   const used = d.year;

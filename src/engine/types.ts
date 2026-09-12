@@ -242,6 +242,14 @@ export interface PendingTeamEvent {
   options: TeamEventOption[];
 }
 
+// ============ v2.4.0 乐透抽签结果（休赛期可视化展示） ============
+export interface LotteryResult {
+  year: number;      // 选秀年份
+  order: number[];   // 30 队按选秀顺位排列（前 14 位为乐透队）
+  odds: number[];    // 与 order 一一对应的"状元概率"（乐透队按战绩档位给，非乐透队 0）
+  top4: number[];    // 抽中前 4 顺位的球队 id（= order 前 4，便于高亮）
+}
+
 // ============ v2.1 选秀大会状态（休赛期手动操作：玩家持有的签可挑选 80 人池） ============
 export interface DraftState {
   year: number;        // v2.3：本届选秀年份（现实年份）
@@ -307,6 +315,8 @@ export interface LeagueState {
   // ---- v2.3.0 下一届选秀预测名单（80 人）：开档即生成，常规赛/休赛期随时可查看，
   //      休赛期选秀时直接作为本届新秀池消耗，然后重新生成下一届 ----
   nextDraftClass: Player[];
+  // ---- v2.4.0 乐透抽签结果（休赛期第一步展示：概率 + 顺位 + 前 4 高亮）----
+  lottery: LotteryResult | null;
 }
 
 export interface GameRef {

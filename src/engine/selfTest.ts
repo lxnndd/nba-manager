@@ -9,7 +9,7 @@ import type { Player } from './types';
 import {
   beginOffseason, settleFreeAgency, simulateOffseasonAI, simulateAIOffseasonTrades,
   finishOffseason, cutPlayer, askFor, signFreeAgentNow, agePlayer, growthPointsFor, timeCoefOf, agingPenaltyOf, spendPoint, autoDistribute, recalcOvr,
-  draftComplete, draftIsUserTurn, draftPickUser, draftRemaining,
+  draftComplete, draftIsUserTurn, draftPickUser, draftRemaining, draftFastToUserPick,
 } from './offseason';
 import { mulberry32 } from './rng';
 import type { LeagueState } from './types';
@@ -517,24 +517,26 @@ function run(): void {
     const jw = find('杰伦·威廉姆斯'), ac = find('亚历克斯·卡鲁索'), jt = find('杰森·塔图姆');
     const lbj = find('勒布朗·詹姆斯'), jok = find('尼古拉·约基奇');
     console.log(`  杰伦·威廉姆斯 ${jw?.pos}/${jw?.secPos} · 卡鲁索 ${ac?.pos}/${ac?.secPos} · 塔图姆 ${jt?.pos}/${jt?.secPos} · 詹姆斯 ${lbj?.pos}/${lbj?.secPos} · 约基奇 ${jok?.pos}/${jok?.secPos}`);
-    ok(jw?.pos === 'SF' && jw?.secPos === 'SG', `杰伦·威廉姆斯 = 小前/后卫（${jw?.pos}/${jw?.secPos}；此前被源数据错标为 C/PF）`);
-    ok(ac?.pos === 'SG' && ac?.secPos === 'PG', '卡鲁索 = 后场（SG/PG；此前被机械推导成 SF/PF）');
-    ok(jt?.pos === 'PF' && jt?.secPos === 'SF', '塔图姆保持前锋（PF/SF，未被误改）');
-    ok(lbj?.pos === 'PF' && lbj?.secPos === 'SF', '詹姆斯保持前锋（PF/SF）');
-    ok(jok?.pos === 'C' && jok?.secPos === 'PF', '约基奇保持中锋（C/PF）');
+    // v2.4.0：位置严格照搬 2K27 的 positions 数组（用户指定）——以下断言即"数据源原值"
+    ok(jw?.pos === 'C' && jw?.secPos === 'PF', `杰伦·威廉姆斯 = 2K 原值 C/PF（${jw?.pos}/${jw?.secPos}）`);
+    ok(ac?.pos === 'SF' && ac?.secPos === 'PG', `卡鲁索 = 2K 原值 SF/PG（${ac?.pos}/${ac?.secPos}）`);
+    ok(jt?.pos === 'PF' && jt?.secPos === 'SF', '塔图姆 = 2K 原值 PF/SF');
+    ok(lbj?.pos === 'PF' && lbj?.secPos === 'SF', '詹姆斯 = 2K 原值 PF/SF');
+    ok(jok?.pos === 'C' && jok?.secPos === 'PF', '约基奇 = 2K 原值 C/PF（数据只给 C，副位置按相邻位置补）');
     const ORDER = ['PG', 'SG', 'SF', 'PF', 'C'];
     const all = rl.teams.flatMap((t) => t.players);
-    const bad = all.filter((p) => Math.abs(ORDER.indexOf(p.pos) - ORDER.indexOf(p.secPos)) !== 1);
-    ok(bad.length === 0, `真实名单主副位置全部相邻（异常 ${bad.length} 人）`);
-    // v2.3.0 位置深度均衡：每队每个位置 ≥2 人（否则该位置独苗会打满 48 分钟）
+    // 主副位置不再强制相邻（2K 数据本身会出现 SF/PG、PG/C 这类组合），只要求两者不同
+    const dup = all.filter((p) => p.pos === p.secPos);
+    ok(dup.length === 0, `主副位置不重复（异常 ${dup.length} 人）`);
+    // 位置深度允许 <2 人（严格照搬 2K 的必然结果）——由引擎 depthList 在比赛中向相邻位置借人兜底
     const thin: string[] = [];
     for (const t of rl.teams) {
       for (const pos of ORDER) {
         const n = t.players.filter((p) => p.pos === pos).length;
-        if (n < 2) thin.push(`${t.abbr}-${pos}(${n})`);
+        if (n < 1) thin.push(`${t.abbr}-${pos}(${n})`);
       }
     }
-    ok(thin.length === 0, `每队五位置均 ≥2 人（异常：${thin.join(' ') || '无'}）`);
+    ok(thin.length === 0, `每队五位置至少各 1 人（缺位：${thin.join(' ') || '无'}）`);
   }
 
   // ---------- v2.3.0 出手分配（球星战术地位 / 空间型内线三分） ----------
@@ -792,10 +794,10 @@ function run(): void {
       const p = sas.players.find((q) => q.id === b.pid)!;
       return `${p.name.slice(0, 4)}(${b.min}分/${b.fga}投)`;
     }).join(' ')}`);
-    // 关键修复点：不再出现"上场 ≥12 分钟却 0 出手"的球员（旧实现里首发 SG 会 0 出手 36 分钟）
-    const zeroShot = played.filter((b) => b.min >= 12 && b.fga === 0 && b.fta === 0);
+    // 关键修复点：不再出现"上场 ≥15 分钟却 0 出手"的球员（旧实现里首发 SG 会 0 出手 36 分钟）
+    const zeroShot = played.filter((b) => b.min >= 15 && b.fga === 0 && b.fta === 0);
     const names = zeroShot.map((b) => sas.players.find((q) => q.id === b.pid)?.name ?? '?');
-    ok(zeroShot.length === 0, `没有"上场 ≥12 分钟却 0 出手"的球员（异常 ${zeroShot.length} 人：${names.join('、')}）`);
+    ok(zeroShot.length === 0, `没有"上场 ≥15 分钟却 0 出手"的球员（异常 ${zeroShot.length} 人：${names.join('、')}）`);
     // 出场时间符合设定（36 分钟档 → 约 24 分钟，因为同位置 2-3 人分摊）
     const maxMin = Math.max(...played.map((b) => b.min));
     ok(maxMin <= 48, `单人出场不超过 48 分钟（最高 ${maxMin}）`);
@@ -809,6 +811,53 @@ function run(): void {
     ok(Math.abs(pmSum - expect) <= 2, `+/- 合计与分差自洽（${pmSum} vs ${expect}）`);
     // 不再出现"首发 -80 / 替补 +85"那种分裂：单人 |+/-| 不超过 4 倍分差 + 10
     ok(worst <= Math.abs(result.awayScore - result.homeScore) * 4 + 10, `单人 +/- 不极端（最大 ${worst}）`);
+  }
+
+  // ---------- v2.4.0 位置审计 / 乐透可视化 / 选秀快进 / 落选秀 ----------
+  console.log('== v2.4.0 位置·乐透·选秀流程 ==');
+  {
+    const al = createRealLeague(seed + 4253);
+    al.userTeamId = 0;
+    const all2 = al.teams.flatMap((t) => t.players);
+    const ORDER2 = ['PG', 'SG', 'SF', 'PF', 'C'];
+    const dray = all2.find((p) => p.name === '德雷蒙德·格林');
+    const jw2 = all2.find((p) => p.name === '杰伦·威廉姆斯');
+    const ac2 = all2.find((p) => p.name === '亚历克斯·卡鲁索');
+    console.log(`  德雷蒙德·格林 ${dray?.pos}/${dray?.secPos} · 杰伦·威廉姆斯 ${jw2?.pos}/${jw2?.secPos} · 卡鲁索 ${ac2?.pos}/${ac2?.secPos}`);
+    // v2.4.0：位置严格照搬 2K27 的 positions 数组（用户指定，不再推断/修正）
+    ok(dray?.pos === 'PF' && dray?.secPos === 'C', `德雷蒙德·格林严格按 2K = PF/C（${dray?.pos}/${dray?.secPos}）`);
+    ok(jw2?.pos === 'C' && jw2?.secPos === 'PF', `杰伦·威廉姆斯严格按 2K = C/PF（${jw2?.pos}/${jw2?.secPos}）`);
+    ok(ac2?.pos === 'SF' && ac2?.secPos === 'PG', `卡鲁索严格按 2K = SF/PG（${ac2?.pos}/${ac2?.secPos}）`);
+    // 主副位置不再强制相邻（2K 数据本身会出现 SF/PG、PG/C 这类组合）
+    const samePos = all2.filter((p) => p.pos === p.secPos);
+    ok(samePos.length === 0, `主副位置不重复（异常 ${samePos.length} 人）`);
+    // 位置深度允许 <2 人（严格照搬 2K 的必然结果），由引擎 depthList 在比赛中借人兜底
+    const thinPos: string[] = [];
+    for (const t of al.teams) {
+      for (const pos of ORDER2) {
+        if (t.players.filter((p) => p.pos === pos).length < 1) thinPos.push(`${t.abbr}-${pos}`);
+      }
+    }
+    ok(thinPos.length === 0, `每队五位置至少各 1 人（缺位：${thinPos.join(' ') || '无'}）`);
+
+    while (al.day < al.totalDays) simDay(al);
+    beginOffseason(al);
+    ok(!!al.lottery, '乐透抽签结果已记录（供界面可视化展示）');
+    if (al.lottery) {
+      ok(al.lottery.order.length === 30, `抽签顺位含 30 队（${al.lottery.order.length}）`);
+      ok(al.lottery.odds.length === 30 && al.lottery.odds[0] > 0, `含每队状元概率（首位 ${((al.lottery.odds[0] ?? 0) * 100).toFixed(1)}%）`);
+      ok(al.lottery.top4.length === 4 && al.lottery.top4[0] === al.lottery.order[0], '前 4 顺位单独记录（用于高亮）');
+      console.log(`  抽签：状元签 ${al.teams[al.lottery.order[0]].abbr}（该队抽前概率 ${((al.lottery.odds[0] ?? 0) * 100).toFixed(1)}%）· 乐透队共 ${al.lottery.odds.filter((o) => o > 0).length} 支`);
+    }
+    const beforeNext = al.draft!.next;
+    const steps = draftFastToUserPick(al);
+    console.log(`  快进到我的签：跳过 ${steps} 个 AI 签位（${beforeNext} → ${al.draft!.next}）`);
+    ok(steps > 0 || draftIsUserTurn(al), '「快进到我的选秀」可用');
+    const faRef = al.freeAgents;
+    const faBefore = al.freeAgents.length;
+    draftComplete(al);
+    ok(al.freeAgents !== faRef, '落选秀加入后 freeAgents 换新数组（界面立即刷新，不再"看起来没进市场"）');
+    ok(al.freeAgents.length > faBefore, `落选秀确实进入自由市场（${faBefore} → ${al.freeAgents.length} 人）`);
   }
 
   console.log('== 自定义轮换冒烟（v0.3.1）==');

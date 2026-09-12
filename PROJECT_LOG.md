@@ -2,7 +2,7 @@
 
 > 用途：把本项目的**全部对话成果**压缩成一份自包含文档。新会话只需读这份文件 + 仓库源码，
 > 即可无缝接手开发，无需重看历史对话。
-> 最后更新：v2.3.0（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（私有）。
+> 最后更新：v2.4.0（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（私有）。
 
 ---
 
@@ -12,13 +12,13 @@
 |---|---|
 | 本地路径 | `C:\Users\10709\Desktop\AI\nba-manager` |
 | 技术栈 | Electron 33 + React 19 + TypeScript 5.7 + Vite 6（纯离线单机，无后端） |
-| 当前版本 | **2.3.0**（package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
-| 交付产物 | `release\NBA-Manager-2.3.0.exe`（便携版，78.2MB，双击即玩） |
+| 当前版本 | **2.4.0**（package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
+| 交付产物 | `release\NBA-Manager-2.4.0.exe`（便携版，78.2MB，双击即玩） |
 | 目标用户 | 用户的弟弟（玩英文名单的真实 NBA 模式）；玩家=一支 NBA 球队的总经理 |
 | 名单模式 | `real`（2K27 真实名单，主力玩法）/ `fictional`（虚构名单，自测基线） |
 | 存档 | `%APPDATA%\NBA经理\saves\auto.json`（Electron）或 localStorage 兜底；`SAVE_VERSION = 11` |
-| 自测 | `src/engine/selfTest.ts`（虚构 + 真实双跑，300+ 断言，全绿才发版） |
-| 本版主题 | 球星得分真实性（文班亚马修正）· 新秀榜与体测数据 · 位置修正 · 三年选秀权 + 次轮 · 乐透抽签/Stepien/新秀薪资 · AI 主动报价 · 事件权衡选项 · 国际新秀国籍与中文译名 · 交易搜索器 |
+| 自测 | `src/engine/selfTest.ts`（虚构 + 真实双跑，330+ 断言，全绿才发版） |
+| 本版主题 | 位置审计（格林修正）· 乐透抽签可视化 · 选秀快进 + 选中确认 · 落选秀入市修复 · 轮换 0 出手修复 · 交易 82 场误拒修复 · 交易搜索器 · 国际新秀中文译名 · 球星得分修正 · 新秀榜 |
 
 **本版（v2.3.0）各档案章节更新要点**
 
@@ -42,8 +42,14 @@
 - 真实名单数值基线（第一季、无成长时）：场均 ~203-207 分/队、FG ~46-49%、3P ~37-37.5%、
   得分王 ~29-30 分、篮板王 ~14 板。改动引擎参数后要复测并记录漂移原因（v2.3.0 记录见 §10.9）。
 - 真实球员 `ovr` 保留 **2K 官方 overall 原值**（95+ 传奇档依赖它）；技能加点通过 `baseSkills` 增量模型回写（见 §5.4）。
-- 真实球员**主/副位置由 tools/build-real-roster.mjs 的 `inferPositions` 推断**（源 2K `positions` 顺序不可靠），
-  改位置逻辑必须重跑 `node tools/build-real-roster.mjs`，并用 `--check` 预览改动清单（见 §4、§10.10）。
+- 真实球员**主/副位置严格照搬 2K27 的 `positions` 数组**（v2.4.0 用户指定）：
+  主位置 = `positions[0]`、副位置 = `positions[1]`（只给 1 个位置时按 `POS_SEC` 补相邻位置）。
+  **不再做任何推断、提位或深度均衡**——数据源写什么就是什么（杰伦·威廉姆斯 = C/PF、卡鲁索 = SF/PG、
+  德雷蒙德·格林 = PF/C）。核对命令 `node tools/build-real-roster.mjs --audit`（应输出 0 处差异）。
+  位置深度不足的球队由引擎 `depthList` 在比赛中向相邻位置借人兜底（替补优先）。
+  ⚠️ 历史教训：v2.3.0 曾用「身高 + 技能评分」推断位置，虽然修好了卡鲁索/杰伦·威廉姆斯，
+  但会与数据源产生大量差异（格林被判成分卫），最终按用户要求改为严格照搬。
+- 改位置逻辑后必须重跑 `node tools/build-real-roster.mjs` 并跑 `--audit` 核对（见 §10.10）。
 - 每轮改动后跑完整验证链（§9），四路径检查 `%SystemDrive%` 残留（§10.6）。
 
 ---
@@ -218,15 +224,22 @@ genDraftClass(rng)：80 人 = **美国 60 / 中国 3 / 其他国家 17**（v2.3.
 DraftState { year, class: Player[](80 人池), order: DraftPick[](60 签 = 30 首轮 + 30 次轮), next, picked }
 接口：draftIsUserTurn / draftRemaining / draftPickAuto(AI 选池中最高 ovr) / draftPickUser(玩家点选) /
      draftComplete(代选全部 + 落选进 FA + 汇总 news + draft=null)
-选秀顺位（v2.3.0 乐透抽签，`league.ts lotteryOrder`）：14 支未进季后赛球队按
+选秀顺位（乐透抽签，`league.ts lotteryDraw`）：14 支未进季后赛球队按
       LOTTERY_ODDS=[.14,.14,.14,.125,.105,.095,.086,.075,.064,.055,.045,.032,.024,.018] 抽前 4 顺位，
       其余乐透队 5-14 按战绩逆序、进季后赛的 16 队 15-30 按战绩逆序；次轮无乐透（纯战绩逆序）。
-      rng 独立流：l.seed*4271 + l.season*613 + 29（不扰动休赛期既有随机序）
+      rng 独立流：l.seed*4271 + l.season*613 + 29
+      v2.4.0：`lotteryDraw` 返回 { order, odds, lotteryIds } → 存入 `l.lottery`
+      （LotteryResult{year,order,odds,top4}）供休赛期界面可视化（`.lottery-panel`：顺位 + 概率条 +
+      前 4 高亮 + 我方 ★）；`lotteryOrder` 保留为只取顺位的兼容包装
 新秀合同（v2.3.0）：首轮 rookieScaleSalary(n) = clamp(1200-(n-1)*34.5, 200, 1200) 万 · 4 年；
       次轮 clamp(salaryFor(ovr), 200, MIN_SALARY) · 2 年
 入队规则（v2.3.0）：休赛期上限 ROSTER_MAX(17)，选中直接扩编（此前 15 人就裁人 → 刚选中的新秀
       常被自己球队裁掉，一届 60 签只留下 36 人）；满 17 裁最弱冗余位腾位；开季前统一裁到 15
       ⚠️ 另修：draftComplete 撞到"用户持有的签"曾直接 break（60 签只签下 37 人），现已改为循环内代选
+落选秀（v2.4.0 修复）：**必须用 `l.freeAgents = [...l.freeAgents, ...added]`**——用 push 就地修改时
+      界面 useMemo 依赖不失效，玩家会以为"落选秀没进自由市场"
+玩家选秀 UI（v2.4.0）：点新秀卡片 = **选中查看**（`.draft-confirm` 显示体测/潜力/技能摘要），
+      点「✓ 确认选中」才真正 draftPickUser；「⏩ 快进到我的选秀」按钮走 draftFastToUserPick
 ```
 
 ### 5.6 自由市场（`offseason.ts`，7 天窗口）
@@ -442,6 +455,15 @@ faDay/faOffers/poffExitShown/pendingEvents/draft。新档为幂等 no-op。
     用 `splice/push` 就地修改 → 引用不变 → `useMemo(..., [l.freeAgents])` 不重算，
     表现是"签约后球员不消失，切换两次才刷新"。修法：引擎改为替换新数组（`l.freeAgents = [...]`）
     **且** UI 依赖加 `.length`。新增列表型 memo 时务必照做。
+15. **位置推断的两条例外规则要带"源位置护栏"（v2.4.0）**：
+    - 「后卫技能包提位」（handle/pass/外线防守都强 → 提到 PG/SG）必须排除**源位置属于内线（PF/C）**的球员，
+      否则德雷蒙德·格林（源 PF/C，但传球/抢断/外线防守都高）会被判成「得分后卫」；
+    - 位置深度均衡**只从相邻位置借人**，且要过「身高契合 > −4 且换位损失 ≤ 14」的合理性门槛；
+      绝不能 fallback 到"任何人数多的位置"（曾把 6'6" 的格林改成 SG 去补勇士的 SG 缺口）；
+    - 复查命令：`node tools/build-real-roster.mjs --audit`（输出可疑名单 + 各队位置深度 + 点名核对）。
+16. **借人轮换要"替补优先"（v2.4.0）**：某位置只剩 1 人时会从相邻位置借人打替补时间；
+    若借到的是**对方首发**，那人就会变成 36+12=48 分钟（实测 CLE 的 PG 被 AI 交易成独苗后，
+    首发 SG 米切尔兼職场均 43.7 分钟）。`depthList` 现在按"在本位置的深度"降序借人（替补/边缘优先）。
 
 ---
 

@@ -196,81 +196,33 @@ function scoreOf(pos, sk, h) {
   return s + heightFit(pos, h);
 }
 const posAdj = (a, b) => Math.abs(POS_ORDER.indexOf(a) - POS_ORDER.indexOf(b)) === 1;
-function inferPositions(p) {
-  const h = parseHeight(p.height);
-  const arr = mapSkills(p);
-  const sk = {};
-  SKILL_KEYS.forEach((k, i) => { sk[k] = arr[i]; });
-  const scored = POS_ORDER.map((pos) => ({ pos, s: scoreOf(pos, sk, h) })).sort((a, b) => b.s - a.s);
+// ---------- v2.4.0 位置：严格照搬 2K27 的 positions 数组（用户指定：不做任何推断/修正） ----------
+//   主位置 = positions[0]；副位置 = positions[1]（数据只给 1 个位置时，按相邻位置补一个，
+//   否则引擎的"主副互换"没有第二列可用）。不均衡、不提位、不按身高过滤——
+//   数据源写什么就是什么（杰伦·威廉姆斯 = C/PF、卡鲁索 = SF/PG、德雷蒙德·格林 = PF/C）。
+const POS_SEC = { PG: 'SG', SG: 'SF', SF: 'PF', PF: 'C', C: 'PF' };
+function positionsOf(p) {
   const src = (p.positions ?? []).filter((x) => POS_ORDER.includes(x));
-  const srcMain = src[0];
-  const guardPack = sk.handle >= 78 && sk.pass >= 72 && (sk.perimeter + sk.steal) / 2 >= 78 && h <= 78;
-  let main;
-  if (srcMain && heightFit(srcMain, h) <= -4) main = scored[0].pos;
-  else if (guardPack) main = scoreOf('PG', sk, h) >= scoreOf('SG', sk, h) ? 'PG' : 'SG';
-  else main = srcMain ?? scored[0].pos;
-  // 副位置候选：数据源给出的另一位 + 与主位相邻的位置（身高不冲突者）
-  const cands = new Set();
-  for (const x of src) if (x !== main && posAdj(x, main) && heightFit(x, h) > -4) cands.add(x);
-  for (const x of POS_ORDER) if (x !== main && posAdj(x, main) && heightFit(x, h) > -4) cands.add(x);
-  let sec = scored.find((x) => cands.has(x.pos))?.pos;
-  if (!sec) sec = scored.find((x) => x.pos !== main && posAdj(x.pos, main))?.pos ?? scored.find((x) => x.pos !== main).pos;
-  return { pos: main, sec };
+  const pos = src[0] ?? 'SF';
+  const sec = src[1] && src[1] !== pos ? src[1] : POS_SEC[pos];
+  return { pos, sec };
 }
-// 位置推断缓存（同一球员只算一次，保证排序/输出一致）
+// 位置缓存（同一球员只算一次，保证排序/输出一致）
 const posCache = new Map();
 const posOf = (p) => {
   const key = p.name;
-  if (!posCache.has(key)) posCache.set(key, inferPositions(p));
+  if (!posCache.has(key)) posCache.set(key, positionsOf(p));
   return posCache.get(key);
 };
-
-// ---------- v2.3.0 位置深度均衡 ----------
-// 每隊每個位置至少 2 人：某位置只有 1 人時該球員會打滿 48 分鐘（引擎按位置深度排輪換），
-// 真實名單裡湖人 PG 只有東契奇一人時就出現過「場均 48 分鐘、38 分」的異常。
-// 做法：人數 >2 的位置裡挑「對缺口位置契合度最高」的球員改打該位置（技能不動，只調主/副位置標籤）。
+// ---------- v2.4.0 位置已改为"严格照搬 2K 数据"，不再做深度均衡 ----------
+// （此前会为了"每位置 ≥2 人"把球员改到别的位置，例如把 6'6" 的德雷蒙德·格林改成 SG 去补勇士的 SG 缺口。
+//   现在数据源写什么就是什么；某位置只有 1 人时由引擎的 depthList 在比赛中向相邻位置借人兜底。）
 const skillsOfP = (p) => {
   const arr = mapSkills(p);
   const sk = {};
   SKILL_KEYS.forEach((k, i) => { sk[k] = arr[i]; });
   return sk;
 };
-function balancePositions(squad) {
-  const info = new Map();
-  for (const p of squad) {
-    const r = posOf(p);
-    info.set(p.name, { pos: r.pos, sec: r.sec });
-  }
-  const cnt = () => {
-    const c = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
-    for (const p of squad) c[info.get(p.name).pos]++;
-    return c;
-  };
-  for (let guard = 0; guard < 60; guard++) {
-    const c = cnt();
-    const need = POS_ORDER.find((k) => c[k] < 2);
-    if (!need) break;
-    const pool = squad.filter((p) => c[info.get(p.name).pos] > 2);
-    // 优先从"与缺口位置相邻"的位置借人（PG←SG、SF←SG/PF…），避免把控卫改成小前这类离谱调整
-    const strict = pool.filter((p) => posAdj(info.get(p.name).pos, need));
-    const use = strict.length ? strict : pool;
-    const cands = use
-      .map((p) => ({ p, cur: info.get(p.name), s: scoreOf(need, skillsOfP(p), parseHeight(p.height)) }))
-      .sort((a, b) => b.s - a.s);
-    const pick = cands[0];
-    if (!pick) break;
-    let sec = pick.cur.pos;
-    if (!posAdj(sec, need)) {
-      const alt = POS_ORDER
-        .filter((k) => k !== need && posAdj(k, need))
-        .map((k) => ({ k, s: scoreOf(k, skillsOfP(pick.p), parseHeight(pick.p.height)) }))
-        .sort((a, b) => b.s - a.s)[0];
-      sec = alt ? alt.k : need;
-    }
-    info.set(pick.p.name, { pos: need, sec });
-  }
-  return info;
-}
 
 // 进入联盟年龄（v2.3.0 升级）：旧公式固定 18+h%4，等于假设"人人 19 岁进联盟"，
 // 于是大四落选秀被算小 3-4 岁（实例如 Julian Reese：2025 年落选、马里兰大四，真实 23 岁，
@@ -366,8 +318,8 @@ for (let i = 0; i < TEAM_ORDER.length; i++) {
   const tName = TEAM_ORDER[i];
   const squad = (byTeam.get(tName) ?? []).slice().sort((a, b) => fixedOverall(b) - fixedOverall(a)).slice(0, 15);
   if (squad.length < 15) { shortTeams++; missing.push(`${ABBR[i]} 只有 ${squad.length} 人`); }
-  // v2.3.0 位置深度均衡（每位置 ≥2 人），再按 位置(引擎序 PG..C) + ovr 降序 = 引擎轮换深度序
-  const posMap = balancePositions(squad);
+  // v2.4.0 位置严格按 2K 数据（posOf），按「位置(引擎序 PG..C) + ovr 降序」= 引擎轮换深度序
+  const posMap = new Map(squad.map((p) => [p.name, posOf(p)]));
   const posRank = { PG: 0, SG: 1, SF: 2, PF: 3, C: 4 };
   squad.sort((a, b) => {
     const pa = posRank[posMap.get(a.name).pos] ?? 9;
@@ -410,6 +362,45 @@ export const REAL_ROSTER: { t: string; players: RealPlayerInfo[] }[] = [
 `;
 
 const CHECK_ONLY = process.argv.includes('--check');
+const AUDIT = process.argv.includes('--audit');
+if (AUDIT) {
+  // v2.4.0 位置审计（严格照搬 2K 数据后）：核对"输出的位置是否与 2K positions 完全一致"，
+  //   并列出各队位置深度（<2 人的位置由引擎 depthList 在比赛中借人兜底，不再改数据）。
+  const mismatch = [];
+  const depthRows = [];
+  let checked = 0;
+  for (let i = 0; i < TEAM_ORDER.length; i++) {
+    const squad = (byTeam.get(TEAM_ORDER[i]) ?? []).slice().sort((a, b) => fixedOverall(b) - fixedOverall(a)).slice(0, 15);
+    if (!squad.length) continue;
+    const c = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
+    for (const p of squad) {
+      checked++;
+      const src = (p.positions ?? []).filter((x) => POS_ORDER.includes(x));
+      const { pos, sec } = posOf(p);
+      const wantPos = src[0] ?? 'SF';
+      const wantSec = src[1] && src[1] !== wantPos ? src[1] : POS_SEC[wantPos];
+      if (pos !== wantPos || sec !== wantSec) {
+        mismatch.push(`${p.name} | ${p.height} | 2K ${src.join('/')} | 输出 ${pos}/${sec}`);
+      }
+      c[pos]++;
+    }
+    const thin = Object.entries(c).filter(([, n]) => n < 2);
+    if (thin.length) depthRows.push(`  ${ABBR[i]}: PG${c.PG} SG${c.SG} SF${c.SF} PF${c.PF} C${c.C}  ← ${thin.map(([k, n]) => `${k}:${n}`).join(' ')}`);
+  }
+  console.log(`=== 与 2K27 数据一致性：核对 ${checked} 人，不一致 ${mismatch.length} 人 ===`);
+  console.log(mismatch.join('\n') || '（全部一致）');
+  console.log('\n=== 各队位置深度（<2 人的位置由引擎比赛中借人兜底）===');
+  console.log(depthRows.join('\n') || '  全部球队五位置均 ≥2 人');
+  console.log('\n=== 点名核对（严格 = 2K positions[0]/positions[1]）===');
+  for (const nm of ['Draymond Green', 'Jalen Williams', 'Alex Caruso', 'Jayson Tatum', 'LeBron James', 'Nikola Jokic', 'Victor Wembanyama', 'Josh Hart', 'Ben Simmons', 'Caleb Martin', 'Dillon Jones', 'David Roddy']) {
+    const p = raw.find((x) => x.name === nm);
+    if (!p) { console.log(`  ${nm}: 未找到`); continue; }
+    const r = posOf(p);
+    console.log(`  ${nm.padEnd(20)} ${p.height} 2K[${(p.positions ?? []).join('/')}] → ${r.pos}/${r.sec}（${p.team}）`);
+  }
+  process.exit(0);
+}
+
 if (CHECK_ONLY) {
   // 只预览位置修正结果（不写文件）：旧口径 = 源 positions[0] + POS_SEC 推导副位置
   const POS_SEC = { PG: 'SG', SG: 'SF', SF: 'PF', PF: 'C', C: 'PF' };

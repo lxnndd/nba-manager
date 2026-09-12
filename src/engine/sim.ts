@@ -372,11 +372,23 @@ const ADJ_POS: Record<Pos, Pos[]> = {
 function depthList(team: Team, pos: Pos, taken?: Set<number>): Player[] {
   const own = available(posDepth(team, pos)).filter((p) => !taken?.has(p.id));
   if (own.length >= 2) return own;
-  for (const adj of ADJ_POS[pos]) {
-    const extra = available(posDepth(team, adj)).filter((p) => !taken?.has(p.id) && !own.includes(p));
-    if (extra.length) return [...own, ...extra];
-  }
-  return own;
+  // v2.4.0：先向相邻位置借人；相邻位置也无人可用（伤病潮/深度不足）时扩大到全部位置。
+  //   借人时**替补优先**——否则首发会被拉来兼職（实测：CLE 的 PG 被交易成独苗后，
+  //   首发 SG 米切尔兼职打 PG 替补，场均变成 43.7 分钟）。
+  const pickFrom = (list: Pos[]) => {
+    const extra: { p: Player; depth: number }[] = [];
+    for (const adj of list) {
+      available(posDepth(team, adj)).forEach((p, i) => {
+        if (!taken?.has(p.id) && !own.includes(p)) extra.push({ p, depth: i });
+      });
+    }
+    extra.sort((a, b) => b.depth - a.depth); // 深度大的（替补/边缘）优先借
+    return extra.map((x) => x.p);
+  };
+  const near = pickFrom(ADJ_POS[pos]);
+  if (near.length) return [...own, ...near];
+  const anyPos = pickFrom(['PG', 'SG', 'SF', 'PF', 'C'].filter((k) => k !== pos) as Pos[]);
+  return anyPos.length ? [...own, ...anyPos] : own;
 }
 
 export function manualRotation(team: Team): boolean {

@@ -489,6 +489,8 @@ function finishLeague(rng: Rng, teams: Team[], idSeq: { v: number }, seed: numbe
     tradeOffers: [],
     // v2.3.0 下一届新秀预测名单（80 人）
     nextDraftClass,
+    // v2.4.0 乐透抽签结果（休赛期抽签时写入）
+    lottery: null,
   };
 }
 

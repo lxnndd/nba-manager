@@ -297,9 +297,13 @@ async function main() {
   const pickCards = await ev(`document.querySelectorAll('.draft-pick-card').length`);
   log(`   当前顺位="${status.trim()}" 可选新秀卡=${pickCards}（轮到玩家签时=80 池，否则 0）`);
   // v2.3：本届选秀 = 60 签（30 首轮 + 30 次轮），面板标题会写明
-  const draftTitle = await ev(`document.querySelector('.draft-panel .sec-title')?.textContent ?? ''`);
+  // v2.4.0：抽签面板也是 .sec-title，需按文本定位"选秀大会"那一条
+  const draftTitle = await ev(`[...document.querySelectorAll('.draft-panel .sec-title')].map(e=>e.textContent).find(t=>t.includes('选秀大会')) ?? ''`);
+  const lotteryTitle = await ev(`[...document.querySelectorAll('.draft-panel .sec-title')].map(e=>e.textContent).find(t=>t.includes('乐透抽签')) ?? ''`);
+  const lotteryRows = await ev(`document.querySelectorAll('.lottery-row').length`);
   const isSixty = /60 签/.test(draftTitle) && /30 首轮 \+ 30 次轮/.test(draftTitle);
   log(`   选秀签结构: ${isSixty ? 'OK' : '异常'} — "${draftTitle.trim()}"`);
+  log(`   乐透抽签展示: ${lotteryRows === 14 ? 'OK' : '异常'} — "${lotteryTitle.trim()}"（${lotteryRows} 行，应 14）`);
   await shot('ui-smoke-11-draft');
   const rAll = await clickBtn('自动完成全部选秀');
   log(`   自动完成全部选秀=${rAll}`);
