@@ -132,10 +132,14 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
     api.tick();
   };
 
-  const faSorted = useMemo(() => [...l.freeAgents].sort((a, b) => b.ovr - a.ovr), [l.freeAgents]);
+  // ⚠️ 依赖带 length：引擎就地增删 freeAgents，引用不变时 useMemo 不会重算（签约/裁人后列表不刷新）
+  const faSorted = useMemo(
+    () => [...l.freeAgents].sort((a, b) => b.ovr - a.ovr),
+    [l.freeAgents, l.freeAgents.length],
+  );
   const draftPoolSorted = useMemo(
     () => (draft ? [...draft.class].sort((a, b) => b.ovr - a.ovr || a.id - b.id) : []),
-    [draft],
+    [draft, draft?.class.length, draft?.next],
   );
   const curPick = draft ? draftRemaining(l).current : null;
   const userTurn = draftIsUserTurn(l);

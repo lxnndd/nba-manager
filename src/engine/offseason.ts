@@ -168,7 +168,7 @@ function releasePlayer(l: LeagueState, p: Player): void {
   p.stats = { min: 0, pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, or: 0, dr: 0 };
   p.gp = 0;
   p.starts = 0;
-  if (p.ovr >= 68 && p.age <= 31) l.freeAgents.push(p); // 战力尚可：回市场等底薪机会
+  if (p.ovr >= 68 && p.age <= 31) l.freeAgents = [...l.freeAgents, p]; // 战力尚可：回市场等底薪机会（替换新数组 → UI 能感知）
   // 其余视为退役/海外淘金，直接出联盟
 }
 
@@ -544,8 +544,7 @@ export function signFreeAgentNow(l: LeagueState, teamId: number, pid: number, ye
   const team = l.teams[teamId];
   const p = l.freeAgents.find((x) => x.id === pid);
   const base: FaResult = { pid, name: p?.name ?? '?', ok: false, won: false, teamId: -1, years, salary, note: '' };
-  if (!team || !p) return { ...base, note: '球员已不在自由市场' };
-  if (years < 1 || years > 4) return { ...base, note: '合同年限需 1-4 年' };
+  if (!team || !p) return { ...base, note: '球员已不在自由市场' };  if (years < 1 || years > 4) return { ...base, note: '合同年限需 1-4 年' };
   if (salary < 250 || salary > 4200) return { ...base, note: '年薪超出允许范围(250-4200万)' };
   if (team.players.length >= ROSTER_MAX) return { ...base, note: `名单已满 ${ROSTER_MAX} 人，请先在「交易」页腾出名额` };
   if (!canSign(l, team, salary)) {
@@ -573,7 +572,9 @@ export function cutPlayer(l: LeagueState, playerId: number): boolean {
   team.players.splice(i, 1);
   p.salary = 0;
   p.contractYears = 0;
-  l.freeAgents.push(p);
+  // ⚠️ v2.3.0 用"替换新数组"而非 push：引擎的就地增删不会改变数组引用，
+  //    而 useGame 的 tick 是浅拷贝 → UI 的 useMemo 依赖不会失效（表现为列表不刷新）
+  l.freeAgents = [...l.freeAgents, p];
   addNews(l, `✂️ ${team.name} 裁掉了 ${p.name}（进入自由市场）。`);
   sortRoster(team);
   return true;
@@ -581,8 +582,7 @@ export function cutPlayer(l: LeagueState, playerId: number): boolean {
 
 // 签约入队（队满 15 则裁掉"最弱且不破坏五位置"的球员回池）；news 由调用侧保证（此函数不记新闻）
 function signTo(l: LeagueState, p: Player, team: Team, years: number, salary: number): void {
-  const i = l.freeAgents.indexOf(p);
-  if (i >= 0) l.freeAgents.splice(i, 1);
+  l.freeAgents = l.freeAgents.filter((x) => x.id !== p.id); // 替换新数组（见 cutPlayer 注释）
   p.salary = salary;
   p.contractYears = years;
   p.starts = 0;

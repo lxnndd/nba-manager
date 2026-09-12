@@ -18,15 +18,16 @@
 | 名单模式 | `real`（2K27 真实名单，主力玩法）/ `fictional`（虚构名单，自测基线） |
 | 存档 | `%APPDATA%\NBA经理\saves\auto.json`（Electron）或 localStorage 兜底；`SAVE_VERSION = 11` |
 | 自测 | `src/engine/selfTest.ts`（虚构 + 真实双跑，300+ 断言，全绿才发版） |
-| 本版主题 | 球星得分真实性（文班亚马修正）· 新秀榜与体测数据 · 位置修正 · 三年选秀权 + 次轮 · 乐透抽签/Stepien/新秀薪资 · AI 主动报价 · 事件权衡选项 |
+| 本版主题 | 球星得分真实性（文班亚马修正）· 新秀榜与体测数据 · 位置修正 · 三年选秀权 + 次轮 · 乐透抽签/Stepien/新秀薪资 · AI 主动报价 · 事件权衡选项 · 国际新秀国籍与中文译名 · 交易搜索器 |
 
 **本版（v2.3.0）各档案章节更新要点**
 
 | 档案章节 | 更新要点 |
 |---|---|
-| §4 数据管线 | 新增 `VET_AGE` 老将年龄表、`fixedOverall` 断崖降分修正、体测解析、位置推断与深度均衡 |
+| §4 数据管线 | 新增 `VET_AGE` 老将年龄表、`fixedOverall` 断崖降分修正、体测解析、位置推断与深度均衡、`NATION_POOLS` 国际姓名池 |
 | §5.2 模拟 | 球权/出手/三分构成全部重标定（`coreBoost`、`ability^1.4`、`p3Base/p3Max` pull、`depthList`） |
-| §5.5 选秀 | 60 签、乐透抽签、Stepien、薪资阶位、入队扩编、`draftComplete` bug 修复 |
+| §5.5 选秀 | 60 签、乐透抽签、Stepien、薪资阶位、入队扩编、`draftComplete` bug 修复、国籍 60/3/17 与中文译名、实力梯度 |
+| §5.7 交易 | 签带年份/轮次 + `pickValue` 动态定价 + **交易搜索器 `searchTrades`** |
 | §5.6 自由市场 | 老将年龄/评分口径指引 |
 | §5.7 交易 | 签带年份/轮次 + `pickValue` 动态定价 |
 | §6 存档 | `SAVE_VERSION = 11`：`DraftPick{year,round}`、`tradeOffers`、`nextDraftClass`、`weight/wingspan`、`TeamEventOption.effects` |
@@ -204,10 +205,16 @@ recalcOvr（基准制）：ovr = clamp(baseOvr + (calcOvr(skills) − calcOvr(ba
 
 ### 5.5 选秀（`gen.ts` + `offseason.ts`，v2.1 起可操作）
 ```
-genDraftClass(rng)：80 人；i<56 美国（英文名）/ 56-60 中国（中文名）/ 60-80 其他（英文名 + 随机国籍）
-  恰好 1 人 ovr 80-83（**未必状元**），其余全部 <80；新秀 ovr ≤ 77 target 生成
-  v2.3.0：天骄从 ovr ≥ 72 的池子里抽（此前完全等概率 → 会出现"OVR 80 却只有 3 星潜力"的怪状元），
-         且保证潜力 ≥ 7 星
+genDraftClass(rng)：80 人 = **美国 60 / 中国 3 / 其他国家 17**（v2.3.0 配额）
+  姓名规则：美国 = `makeEnName`（FIRST_EN/LAST_EN 英文名）；中国 = 中文姓名池；
+  其他国家 = `NATION_POOLS`（data.ts，21 个具体国家：法国/塞尔维亚/西班牙/德国/澳大利亚/加拿大/
+  尼日利亚/南苏丹/喀麦隆/立陶宛/拉脱维亚/土耳其/希腊/斯洛文尼亚/克罗地亚/意大利/日本/韩国/
+  菲律宾/新西兰/格鲁吉亚）→ 按该国本土姓名生成后译为中文常见译名
+  （nameOrder: 'west' = 名·姓 / 'east' = 姓+名，如 八村塁、朴贤宇）
+  ⚠️ 绝不再用"欧洲/南美/亚洲"这类地区名（selfTest 有 REGIONS 黑名单断言）
+  实力梯度：tier = (i/80)*5.4 平滑递减 → target ≈ 76 → 54（状元级 ~76 / 首轮末 ~66 / 次轮末 ~55）
+  ⚠️ 旧实现 tier = Math.floor(i/3) 在第 30 顺位就触底 → 次轮秀清一色 55 分
+  恰好 1 人 ovr 80-83，其余全部 <80；天骄从 ovr ≥ 72 的池子里抽（潜力 ≥ 7 星）
 DraftState { year, class: Player[](80 人池), order: DraftPick[](60 签 = 30 首轮 + 30 次轮), next, picked }
 接口：draftIsUserTurn / draftRemaining / draftPickAuto(AI 选池中最高 ovr) / draftPickUser(玩家点选) /
      draftComplete(代选全部 + 落选进 FA + 汇总 news + draft=null)
@@ -236,6 +243,15 @@ AI 竞价：ask × (0.93 ~ 1.08)；star 风格且 ovr ≥ 88 → 接受门槛 0.
 
 ### 5.7 交易（`league.ts`）
 ```
+【交易搜索器 v2.3.0】searchTrades(l, givePids, givePickIdx, maxPerTeam=3) → TradeSuggestion[]
+  入参 = 玩家勾选的自有筹码（1-N 名球员 / 选秀权）；遍历 29 队，四类搜索：
+    ① 单换单 ② 对方「球员 + 选秀权」 ③ 对方打包两人 ④ 追加我方筹码
+       （④ 既做"当前筹码换不动"的兜底，也做"再加一点换更好的"升级 → 标 needsMore）
+  候选裁剪：对方球员价值 ∈ [0.45×gv, 1.9×gv] 取前 8、签取前 4；pickValue 结果预计算（否则循环里上千次排序）
+  每队最多返回 maxPerTeam 条普通方案 + 1 条"需追加"升级方案；全部经 evaluateTrade 完整校验
+  实测性能：4-11ms / 次（29 队全扫），单次返回 70-105 条建议
+  返回结构 TradeSuggestion{ teamId, givePids, givePickIdx, wantPids, wantPickIdx, reason, gain, needsMore, note }
+
 tradeValue = max(0.1, round(2^((eff-75)/10), 2))（75 基线、每 +10 翻倍）
   eff = ovr
       + (≤25 岁且潜力高) (potential-5)*3 * 0.55 * clamp(1+(25-age)*0.08, 0.6, 1.6)
@@ -333,8 +349,11 @@ faDay/faOffers/poffExitShown/pendingEvents/draft。新档为幂等 no-op。
 - **OffseasonView.tsx**：step1 = 休赛期报告 + **选秀面板**（`.draft-panel`、轮到玩家签显示 `.draft-pick-card` 池、
   AI 代选/自动完成）+ 「进入自由市场」（选秀未完成时禁用）；step2 = 阵容裁人 + FA 7 天市场（报价 ≤3/天、
   `.offer-panel`、结束当天结算）；step3 = 结果报告（`.offseason-report`）+ 双风格重选 + 开始新赛季。
-- **TradeView.tsx**：双方工资单/战绩状态条、两列球员 + 首轮签筹码、**实时预检**（点球员即 `evaluateTrade`，
-  verdict 自动刷新；「确认交易」只做最终执行）、战力前后对比、`.pick-row` 头像 + 点名字开 `PlayerModal`。
+- **TradeView.tsx**：双方工资单/战绩状态条、两列球员 + 选秀权筹码、**实时预检**（点球员即 `evaluateTrade`，
+  verdict 自动刷新；「确认交易」只做最终执行）、战力前后对比、`.pick-row` 头像 + 点名字开 `PlayerModal`；
+  底部 **🔍 交易搜索器**（v2.3.0）：勾选自有筹码 → `searchTrades` 全联盟扫描 → 结果按
+  「✓ 用当前筹码即可成交」/「⚠ 对方还想多要人（需追加筹码）」两组展示（`.search-row`/`.sr-*`），
+  每条可「填入筹码」或「✓ 直接成交」；默认每组显示 10 条，可展开全部。
 - **FreeMarketView.tsx**：赛季中即时签约（点名字看详情、要价、底薪/中产通道提示、剩余空间）。
 - **LeagueView.tsx**：排名（行可点进 `TeamDetail`：队徽/战绩/排名/工资单/战力/风格 + 15 人列表）/
   数据榜（无「效率」）/ 荣誉殿堂（`AwardsPanel` + 历届冠军 MVP FMVP）。
@@ -400,19 +419,29 @@ faDay/faOffers/poffExitShown/pendingEvents/draft。新档为幂等 no-op。
    exe 图标由 `build/icon.png`（篮球）在 makensis 编译期嵌入。打包前必须杀掉旧实例，否则 electron-builder 占用失败。
 9. **冻结基线**：真实名单第一季场均约 200-207 分/队；改动引擎参数（球权/篮板/命中率）后数值会漂移，
    需在验收时说明原因（例：v2.2.0 球权前场化 + v2.1 篮板下调 → 207.6；v2.2.1 → 205.5）。
-   **v2.3.0 记录**：205.5 → **206.3 分/队**（FG 49.6% → 48.0%，3P 37.4% → 37.0%，得分王 26.1 → 29.5）。
-   漂移原因：①球权向球星集中（`coreBoost`）②三分倾向改能力驱动（空间型内线开始大量投三分，FG 略降、三分占比上升）
-   ③位置口径修正改变了轮换与球权分布。**这是有意为之的方向性调整**（球星产量贴近真实），不是回归。
+   **v2.3.0 记录**：205.5 → **206.3 分/队**（FG 48.0%，3P 37.1%，得分王 32.8）。漂移原因：①球权向球星集中
+   （`coreBoost`）②三分倾向改能力驱动 ③位置口径修正 ④手动轮换改「每分钟排班表」。**均为有意为之的方向性调整**。
 10. **位置推断的三条铁律（v2.3.0 血泪教训）**：
     - 数据源的 `positions` 顺序**不可信**（Jalen Williams 6'5" 被标 C/PF、Caruso 被标 SF/PG），必须用身高 + 技能推断；
     - **别用身高硬过滤**：最初按身高把 6'11" 的杜兰特限成 PF/C（错得离谱）。要用「技能契合分 + 身高契合分」联合评分，
       且身高契合用**软惩罚**（每超 1 英寸 −3.5 分）而非硬性排除；
     - **改动前先自动预览**：`node tools/build-real-roster.mjs --check` 会列出全部位置改动，逐条核对名人案例再落盘；
-    - 位置推断改完必须做**队伍位置深度均衡**（每队每位置 ≥2 人），否则"某队某位置独苗 → 打满 48 分钟"
-      （湖人 PG 只有东契奇时实测 48.0 分钟 / 38.8 分）。
-11. **引擎简化的补偿系数要标定，不要凭直觉**：v2.3.0 的 `coreBoost`（队内第一选择 ×1.5）看似激进，
+    - 位置推断改完必须做**队伍位置深度均衡**（每队每位置 ≥2 人），否则"某队某位置独苗 → 打满 48 分钟"。
+11. **引擎简化的补偿系数要标定，不要凭直觉**：v2.3.0 的 `coreBoost`（队内第一选择 ×2.5）看似激进，
     但它是对"回合模型过于平均主义"的补偿——按真实 2025-26 赛季 8 位球星的场均得分标定后，
-    6 位误差在 1 分内（文班 24.3→26.1、塔图姆 26.8→28.5、库里 24.5→25.7）。改这类系数前先跑对照表。
+    6 位误差在 1-2 分内（文班 24.3→26.1、塔图姆 26.8→28.5、库里 24.5→25.7）。改这类系数前先跑对照表。
+12. **轮换必须"分钟级稳定"，不能"每回合重算"（v2.3.0 最隐蔽的 bug）**：
+    症状是"首发 36 分钟 0 出手、替补包办出手、+/- 首发 -53 / 替补 +43"。
+    根因：`sideLineup` 每个回合用「剩余目标时间」重新选人 → 同一位置的两人被**进攻回合/防守回合**分开
+    （防守回合选走 A、进攻回合选走 B）→ A 只在防守时在场（永不投篮）。
+    修法：`rotationPlan` 预计算 48 分钟固定排班（最小余额法交错），攻防同一分钟同一批人。
+    **教训：任何"按剩余量贪心"的调度都要检查"同一时间片内是否稳定"。**
+13. **WeakMap 做引擎缓存（v2.3.0）**：`roleCache` 曾用 `team.id` 作 key → 重开一局时命中上一局的缓存，
+    加成给错球员。凡是以"联赛内对象"为缓存键的场景，一律用 `WeakMap<对象, ...>`（新联赛 = 新对象 → 自动失效）。
+14. **列表 UI 的 memo 依赖要带 length（v2.3.0）**：`useGame.tick` 是浅拷贝，而引擎对 `freeAgents` 等数组
+    用 `splice/push` 就地修改 → 引用不变 → `useMemo(..., [l.freeAgents])` 不重算，
+    表现是"签约后球员不消失，切换两次才刷新"。修法：引擎改为替换新数组（`l.freeAgents = [...]`）
+    **且** UI 依赖加 `.length`。新增列表型 memo 时务必照做。
 
 ---
 

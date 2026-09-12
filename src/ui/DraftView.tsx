@@ -19,7 +19,7 @@ export function DraftView({ api }: { api: GameApi }) {
     else if (sortBy === 'age') arr.sort((a, b) => a.age - b.age || b.ovr - a.ovr);
     else arr.sort((a, b) => b.height - a.height || b.ovr - a.ovr);
     return arr;
-  }, [l.nextDraftClass, sortBy]);
+  }, [l.nextDraftClass, l.nextDraftClass?.length, sortBy]);
 
   // 下一届选秀年份 = 本赛季结束后那个夏天
   const draftYear = l.year + 1;

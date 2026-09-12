@@ -1,7 +1,7 @@
 // ============ 核心类型 ============
 import type { Attrs, BodyAttrs, DraftPick, LeagueState, PickRound, Player, Pos, Skills18, Team, TeamStyleId, GameRef } from './types';
 import { SAVE_VERSION } from './types';
-import { TEAMS, FIRST_NAMES, LAST_NAMES, FIRST_EN, LAST_EN, POS_ORDER } from './data';
+import { TEAMS, FIRST_NAMES, LAST_NAMES, FIRST_EN, LAST_EN, POS_ORDER, NATION_POOLS, type NationPool } from './data';
 import { REAL_FA, REAL_ROSTER, type RealPlayerInfo } from './realRoster';
 import { clamp, gauss, mulberry32, pick, randInt, shuffle, type Rng } from './rng';
 
@@ -673,7 +673,6 @@ export function genRookie(rng: Rng, tier: number, idSeq: { v: number }): Player 
 // ---------- v2.0 选秀大会：每届 80 人（v2.1：美 70% 英文名 / 中 5% 中文名 / 其他 25% 英文名） ----------
 // 保证恰好 1 名总评 ≥80（**不锁定状元**，由 rng 决定在哪一顺位），其余一律 <80；
 // 返回按生成顺序（≈即战力顺位）的 80 人池（id 由调用方统一分配）。
-const OTHER_NATIONS = ['欧洲', '南美', '非洲', '澳洲', '亚洲'];
 const usedEnNames = new Set<string>(); // 英文名防重（模块级，选秀/补员共用）
 
 export function makeEnName(rng: Rng): string {
@@ -684,17 +683,40 @@ export function makeEnName(rng: Rng): string {
   return pick(rng, FIRST_EN) + ' ' + pick(rng, LAST_EN) + ' Jr.';
 }
 
+// 按国家姓名池生成中文译名（欧美非拉美 = 名·姓；中日韩 = 姓+名）
+function makeIntlName(rng: Rng, pool: NationPool): string {
+  const f = pick(rng, pool.first)[1];
+  const l = pick(rng, pool.last)[1];
+  return pool.nameOrder === 'east' ? `${l}${f}` : `${f}·${l}`;
+}
+
+// v2.3.0 国籍配额：美国 60 / 中国 3 / 其他国家 17（合计 80）
+export const DRAFT_US = 60;
+export const DRAFT_CN = 3;
+export const DRAFT_INTL = 17;
+
 export function genDraftClass(rng: Rng): Player[] {
   const class80: Player[] = [];
   for (let i = 0; i < 80; i++) {
-    // tier：前 30 位近似首轮（0-9 档次），后 50 位次轮档
-    const tier = Math.floor(i / 3);
-    const p = genRookie(rng, Math.min(tier, 22), { v: -1 }); // id 由调用方重新分配
+    // tier 曲线（v2.3.0 修正）：此前 tier = i/3，从第 30 顺位起 target 就触底 → 次轮秀清一色 55 分。
+    // 现在 0 → 5.4 平滑递减，让 80 人形成真实梯度（状元级 ~76 → 首轮末 ~66 → 次轮末 ~55）。
+    const tier = (i / 80) * 5.4;
+    const p = genRookie(rng, tier, { v: -1 }); // id 由调用方重新分配
     p.id = -1;
-    // 国籍分布：i<56 美国 / 56-60 中国 / 60-80 其他均分（用 rng 保持确定性复现）
-    p.nation = i < 56 ? '美国' : i < 60 ? '中国' : pick(rng, OTHER_NATIONS);
-    // v2.1 名字与国籍匹配：美国/其他用英文名，中国用中文名（genPlayer 已生成中文名，需要替换）
-    if (p.nation !== '中国') p.name = makeEnName(rng);
+    // v2.3.0 国籍分布：0-59 美国 / 60-62 中国 / 63-79 其他国家（具体国家，不再出现"欧洲/南美"这类地区名）
+    //   姓名规则：美国 = 英文名（与真实名单一致）；中国 = 中文姓名；
+    //   其他国家 = 按该国本土姓名生成后译为中文常见译名（法国 Victor → 维克托·文班亚马；日本 八村塁）
+    if (i < DRAFT_US) {
+      p.nation = '美国';
+      p.name = makeEnName(rng);
+    } else if (i < DRAFT_US + DRAFT_CN) {
+      p.nation = '中国';
+      // 保留 genPlayer 生成的中文姓名（姓 + 名）
+    } else {
+      const pool = pick(rng, NATION_POOLS);
+      p.nation = pool.nation;
+      p.name = makeIntlName(rng, pool);
+    }
     // 压回 <80（保持"其余都低于 80"；≥80 的幸运儿稍后随机指定）
     if (p.ovr >= 80) p.ovr = 79;
     class80.push(p);

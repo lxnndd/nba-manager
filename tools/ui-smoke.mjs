@@ -4,6 +4,7 @@ const port = Number(process.argv[2] || 9333);
 import fs from 'node:fs';
 
 async function main() {
+  const pageErrors = [];
   const list = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
   const page = list.find((p) => p.type === 'page');
   if (!page) throw new Error('no page');
@@ -13,18 +14,32 @@ async function main() {
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
     if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); }
+    // v2.3.0：收集页面控制台错误（引擎异常会在这里现形，用于定位"模拟无反应"类问题）
+    if (m.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(m.params?.type)) {
+      const txt = (m.params.args ?? []).map((a) => a.value ?? a.description ?? '').join(' ');
+      if (txt) pageErrors.push(`[console.${m.params.type}] ${txt}`.slice(0, 400));
+    }
+    if (m.method === 'Runtime.exceptionThrown') {
+      const d = m.params?.exceptionDetails;
+      pageErrors.push(`[exception] ${(d?.exception?.description ?? d?.text ?? '').slice(0, 500)}`);
+    }
   };
   await new Promise((r) => (ws.onopen = r));
   const send = (method, params = {}) => new Promise((res) => {
     const id = ++idc; pend.set(id, res); ws.send(JSON.stringify({ id, method, params }));
   });
+  await send('Runtime.enable'); // 开启异常/console 事件订阅
+  // v2.3.0：把窗口置前——Electron 窗口在后台时计时器会被 Chromium 节流，
+  // 表现为"点了模拟没反应 / busy 卡死"（实为 10ms 的 setTimeout 被拖到几十秒）
+  await send('Page.enable');
+  await send('Page.bringToFront');
   const ev = async (expression) => {
     const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
     if (r.result?.exceptionDetails) throw new Error('页面异常: ' + JSON.stringify(r.result.exceptionDetails).slice(0, 400));
     return r.result?.result?.value;
   };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const waitFor = async (expr, timeout = 20000, step = 300) => {
+  const waitFor = async (expr, timeout = 45000, step = 400) => {
     const t0 = Date.now();
     while (Date.now() - t0 < timeout) {
       if (await ev(expr)) return true;
@@ -220,10 +235,14 @@ async function main() {
   const finalCol = await ev(`document.querySelectorAll('.poff-bracket .poff-col.final-col').length`);
   log(`   对位图列数=${bracketCols} 总决列=${finalCol}`);
   await closeModal(); await closeModal();
+  // v2.3.0：点击前先看按钮状态（disabled = React busy 卡死，是"模拟无反应"的典型症状）
+  const simBtnState = await ev(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('模拟本轮季后赛'));return b?(b.disabled?'disabled':'enabled'):'notfound'})()`);
+  const errBanner = await ev(`document.querySelector('.err-banner')?.textContent ?? ''`);
+  log(`   模拟本轮按钮=${simBtnState} 页面错误横幅="${String(errBanner).slice(0, 120)}"`);
   r = await clickBtn('模拟本轮季后赛');
   log(`   模拟本轮=${r}`);
   // 等待系列出现比分（模拟为 10ms setTimeout；弹窗/晋级可能并发）
-  const gotGames = await waitFor(`(()=>{const s=[...document.querySelectorAll('.series-card:not(.placeholder) .series-score')].map(x=>x.textContent.trim());return s.some(x=>x!=='0 - 0')})()`, 20000, 350);
+  const gotGames = await waitFor(`(()=>{const s=[...document.querySelectorAll('.series-card:not(.placeholder) .series-score')].map(x=>x.textContent.trim());return s.some(x=>x!=='0 - 0')})()`, 45000, 500);
   log(`   系列比分已出现: ${gotGames ? 'OK' : '超时'}`);
   await sleep(600);
   await closeModal(); await closeModal();
@@ -272,7 +291,7 @@ async function main() {
   log('11. 开启休赛期 → 选秀大会面板...');
   const rGo = await clickBtn('开启休赛期');
   log(`   开启休赛期=${rGo}`);
-  const draftOk = await waitFor(`!!document.querySelector('.draft-panel')`, 20000, 400);
+  const draftOk = await waitFor(`!!document.querySelector('.draft-panel')`, 45000, 500);
   log(`   选秀面板: ${draftOk ? 'OK' : '超时'}`);
   const status = await ev(`document.querySelector('.draft-status')?.textContent ?? ''`);
   const pickCards = await ev(`document.querySelectorAll('.draft-pick-card').length`);
@@ -284,7 +303,7 @@ async function main() {
   await shot('ui-smoke-11-draft');
   const rAll = await clickBtn('自动完成全部选秀');
   log(`   自动完成全部选秀=${rAll}`);
-  const draftGone = await waitFor(`!document.querySelector('.draft-panel')`, 20000, 400);
+  const draftGone = await waitFor(`!document.querySelector('.draft-panel')`, 45000, 500);
   log(`   选秀完成（面板消失）: ${draftGone ? 'OK' : '超时'}`);
   const draftSummary = await ev(`document.body.innerText.includes('本届选秀共 80 人')`);
   log(`   选秀汇总报告: ${draftSummary ? 'OK' : '无'}`);
@@ -292,6 +311,12 @@ async function main() {
   log(`   进入自由市场按钮可用: ${enterOk ? 'OK' : '超时'}`);
 
   log('=== UI 冒烟结束 ===');
+  if (pageErrors.length) {
+    log(`=== 页面错误/警告 ${pageErrors.length} 条（前 12 条）===`);
+    for (const e of pageErrors.slice(0, 12)) log('   ' + e);
+  } else {
+    log('=== 页面无 console 错误 ===');
+  }
   process.exit(0);
 }
 

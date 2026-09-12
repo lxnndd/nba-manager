@@ -27,9 +27,12 @@ export function FreeMarketView({ api }: { api: GameApi }) {
   const overTax = payroll > TAX_LINE;
   const rosterFull = me.players.length >= ROSTER_MAX;
 
+  // ⚠️ 依赖里必须带 length：引擎对 freeAgents 是"就地增删"（splice/push），
+  // 数组引用不变 → 只用 [l.freeAgents] 时 useMemo 不会重算，
+  // 表现就是"签约成功后球员没立即消失，切换两次才刷新"。
   const faSorted = useMemo(
     () => [...l.freeAgents].sort((a, b) => b.ovr - a.ovr || b.potential - a.potential || a.id - b.id),
-    [l.freeAgents],
+    [l.freeAgents, l.freeAgents.length],
   );
 
   const toggleOffer = (pid: number) => {

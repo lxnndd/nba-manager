@@ -272,6 +272,17 @@ function balancePositions(squad) {
   return info;
 }
 
+// 进入联盟年龄（v2.3.0 升级）：旧公式固定 18+h%4，等于假设"人人 19 岁进联盟"，
+// 于是大四落选秀被算小 3-4 岁（实例如 Julian Reese：2025 年落选、马里兰大四，真实 23 岁，
+// 旧公式给 19-22 岁）。真实规律：选秀身价越高越早进联盟（one-and-done 19 岁），
+// 落选秀/大四球员普遍 22-23 岁才进联盟。
+function entryAgeOf(ovr) {
+  if (ovr >= 84) return 19;    // 高顺位/明星苗子：one-and-done
+  if (ovr >= 78) return 20;    // 首轮中后段
+  if (ovr >= 72) return 21.5;  // 次轮/轮换边缘：多为大三、大四
+  return 22.5;                 // 落选秀/大四球员
+}
+
 // 年龄推导：ratingHistory 长度 = 被 2K 收录的版本数 → 选秀届 ≈ 2027 - len
 //   len=0 → 2026 届新秀（历史未回填）；len=2 → 2025 届(Flagg)；len=4 → 2023 届(Wemby)；
 //   len=12 → 2015 届(Jokic/KAT)；len=18 → 2009 年前出道的老将(KD/Curry/LBJ，截断)
@@ -283,7 +294,8 @@ function estimateAge(p, h) {
   else if (len === 0) draft = 2026;
   else draft = 2027 - len;
   if (draft <= 2009) return 35 + (h % 7); // 35-41（LBJ/KD/Curry 类）
-  return 2026 - draft + 18 + (h % 4); // 选秀当年 18-21 岁
+  // 进入联盟年龄按选秀身价分档 + 确定性抖动（±1 岁）
+  return Math.round(2026 - draft + entryAgeOf(fixedOverall(p)) + (h % 3) - 1);
 }
 
 // 经验年数：ratingHistory 收录数 = 已征战赛季数（len=0 为 2026 届首年新秀）

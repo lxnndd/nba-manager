@@ -2,7 +2,7 @@
 // 验证：名单结构、比分分布、全季推进、季后赛、赛季奖项、休赛期（FA/AI交易）、存档迁移
 import { createLeague, createRealLeague, repositionPlayer, bodyKeys, genRookie, genDraftClass, genFreeAgent, TEAM_STYLES, COACH_STYLES, applyTeamStyle, applyCoachStyle, assignTags, calcOvr, SKILL_KEYS, genSkills, POS_SEC } from './gen';
 import { simulateGame, bondMods, teamEffMods } from './sim';
-import { simDay, runPlayoffRound, simPlayoffGame, playoffChampion, evaluateTrade, applyTrade, standings, leaders, nextGameOf, playedCount, migrateSave, teamStrength, pickValue, tradeValue, ROSTER_MAX, payrollOf, SALARY_CAP, TAX_LINE, refreshPlayoffPlaceholders, tryAITradeOfferToUser, acceptTradeOffer, rejectTradeOffer, pickLabel, lotteryOrder, rookieScaleSalary } from './league';
+import { simDay, runPlayoffRound, simPlayoffGame, playoffChampion, evaluateTrade, applyTrade, standings, leaders, nextGameOf, playedCount, migrateSave, teamStrength, pickValue, tradeValue, ROSTER_MAX, payrollOf, SALARY_CAP, TAX_LINE, refreshPlayoffPlaceholders, tryAITradeOfferToUser, acceptTradeOffer, rejectTradeOffer, pickLabel, lotteryOrder, rookieScaleSalary, searchTrades, GP_CAP, GP_TRADE_TOLERANCE } from './league';
 import { computeSeasonAwards, computeFinalsMVP } from './awards';
 import { rollPostGameEvent, resolveTeamEvent } from './events';
 import type { Player } from './types';
@@ -152,7 +152,8 @@ function simSeason(l: LeagueState, label: string): void {
   const tg = 1230;
   console.log(`耗时 ${Date.now() - t0}ms | 场均 ${(agg.pts / tg).toFixed(1)} 分/队 | FG ${(agg.fgm / agg.fga * 100).toFixed(1)}% | 3P ${(agg.tpm / agg.tpa * 100).toFixed(1)}% | FT ${(agg.ftm / agg.fta * 100).toFixed(1)}%`);
   console.log(`篮板 ${(agg.reb / tg).toFixed(1)} | 助攻 ${(agg.ast / tg).toFixed(1)} | 失误 ${(agg.tov / tg).toFixed(1)}`);
-  for (const t of l.teams) for (const p of t.players) ok(p.gp <= 82, `${label} ${p.name} gp=${p.gp} 超过 82`);
+  // v2.3.0：跨队转会后允许略超 82 场（赛程随机铺日 → 各队进度有几天差异），上限 = 82 + 容差
+  for (const t of l.teams) for (const p of t.players) ok(p.gp <= GP_CAP + GP_TRADE_TOLERANCE, `${label} ${p.name} gp=${p.gp} 超过 ${GP_CAP + GP_TRADE_TOLERANCE}`);
 }
 
 function run(): void {
@@ -330,12 +331,25 @@ function run(): void {
     ok(dc.filter((p) => p.ovr < 80).length === 79, '其余 79 人 <80');
     const nations = new Map<string, number>();
     for (const p of dc) nations.set(p.nation, (nations.get(p.nation) ?? 0) + 1);
-    ok(nations.get('美国') === 56 && nations.get('中国') === 4, `国籍分布 美 70%/中 5%（${nations.get('美国')}/${nations.get('中国')}）`);
+    ok(nations.get('美国') === 60 && nations.get('中国') === 3, `国籍配额 美 60 / 中 3（${nations.get('美国')}/${nations.get('中国')}）`);
+    // v2.3.0：其他国家必须是具体国家（不能出现"欧洲/南美/亚洲"这类地区名）
+    const REGIONS = ['欧洲', '南美', '北美', '非洲', '澳洲', '亚洲', '其他'];
+    const intl = dc.filter((p) => p.nation !== '美国' && p.nation !== '中国');
+    ok(intl.length === 17, `其他国家新秀 17 人（${intl.length}）`);
+    ok(intl.every((p) => !REGIONS.includes(p.nation)), `国际新秀国籍全部具体到国家（${[...new Set(intl.map((p) => p.nation))].slice(0, 8).join('、')}…）`);
+    console.log(`  国际新秀样例：${intl.slice(0, 5).map((p) => `${p.nation} ${p.name}`).join(' · ')}`);
     const usNames = dc.filter((p) => p.nation === '美国').map((p) => p.name);
     const cnNames = dc.filter((p) => p.nation === '中国').map((p) => p.name);
     ok(usNames.every((n) => /^[A-Za-z][A-Za-z. ]+$/.test(n)), '美国新秀用英文名（不再中文名标"美国"）');
     ok(cnNames.every((n) => /[\u4e00-\u9fff]/.test(n)), '中国新秀用中文名');
+    // 国际新秀名字已译为中文（含间隔号"，"或纯汉字，如"维克托·文班亚马"/"八村塁"）
+    ok(intl.every((p) => /^[\u4e00-\u9fff·．]+$/.test(p.name)), `国际新秀名字已译成中文（${intl[0]?.name}…）`);
     ok(new Set(dc.map((p) => p.name)).size === 80, '80 人名字无重复');
+    // v2.3.0：新秀实力梯度（此前 tier 在第 30 顺位就触底 → 次轮清一色 55 分）
+    const sortedOvr = dc.map((p) => p.ovr).sort((a, b) => b - a);
+    console.log(`  新秀实力梯度：第 1 位 ${sortedOvr[0]} · 第 20 位 ${sortedOvr[19]} · 第 50 位 ${sortedOvr[49]} · 末位 ${sortedOvr[79]}`);
+    ok(sortedOvr[79] < sortedOvr[49] || sortedOvr[49] < sortedOvr[0], '新秀实力随顺位递减（有梯度，不再清一色）');
+    ok(new Set(dc.slice(30).map((p) => p.ovr)).size >= 5, `次轮/后段新秀实力有区分度（${new Set(dc.slice(30).map((p) => p.ovr)).size} 种 OVR）`);
     ok(dc.every((p) => p.secPos === POS_SEC[p.pos]), '新秀双位置齐全');
     // v2.1 自由市场生成均匀 55-80
     const rngF = mulberry32(seed + 557);
@@ -675,6 +689,126 @@ function run(): void {
     ok(maxSal === rookieScaleSalary(1), `状元签新秀拿阶位顶薪（${maxSal} 万）`);
     ok(minSal >= 200, `最末位新秀也不低于底薪档（${minSal} 万）`);
     ok(drafted.every((p) => p.contractYears >= 2 && p.contractYears <= 4), '新秀合同年限 2-4 年（首轮 4 年 / 次轮 2 年）');
+  }
+
+  // ---------- v2.3.0 交易搜索器 ----------
+  console.log('== v2.3.0 交易搜索器（选筹码 → 搜全联盟可行组合）==');
+  {
+    const tl = createRealLeague(seed + 4250);
+    tl.userTeamId = 0;
+    const me = tl.teams[0];
+    const byOvr = [...me.players].sort((a, b) => b.ovr - a.ovr);
+    const t0 = Date.now();
+    const res = searchTrades(tl, [byOvr[0].id], [], 3);
+    const ms = Date.now() - t0;
+    console.log(`  用核心球员（${byOvr[0].name}）搜索：${res.length} 条建议（${ms}ms）`);
+    ok(res.length > 0, `搜索器能搜到可行交易（${res.length} 条）`);
+    ok(ms < 2000, `搜索性能可接受（${ms}ms）`);
+    ok(res.every((s) => s.givePids.length + s.givePickIdx.length > 0), '每条建议都含"你送出"的筹码');
+    ok(res.every((s) => s.wantPids.length + s.wantPickIdx.length > 0), '每条建议都含"你得到"的筹码');
+    const invalid = res.filter((s) =>
+      !evaluateTrade(tl, me.id, s.teamId, s.givePids, s.wantPids, s.givePickIdx, s.wantPickIdx).accept);
+    ok(invalid.length === 0, `所有建议都能通过完整规则校验（异常 ${invalid.length} 条）`);
+    // 打包多名球员
+    const multi = [byOvr[5].id, byOvr[6].id];
+    const res2 = searchTrades(tl, multi, [], 3);
+    ok(res2.length > 0, `打包多名球员同样能搜到方案（${res2.length} 条）`);
+    // 带选秀权的搜索
+    const firstPick = tl.draftPool.findIndex((pk) => pk.o === 0 && pk.round === 1);
+    const res3 = searchTrades(tl, [], [firstPick], 3);
+    ok(res3.length > 0, `用选秀权也能搜到方案（${res3.length} 条）`);
+    // "需追加筹码"方案（AI 想要你好几个人）
+    const up = [...res, ...res2, ...res3].filter((s) => s.needsMore);
+    console.log(`  "需追加筹码"方案 ${up.length} 条${up.length ? `（样例：送你 ${up[0].givePids.length} 人 + ${up[0].givePickIdx.length} 签 → 得 ${up[0].wantPids.length} 人）` : ''}`);
+    if (up.length) {
+      const s = up[0];
+      const base = [res, res2, res3].find((arr) => arr.some((x) => x.teamId === s.teamId)) ?? [];
+      const sameTeam = base.find((x) => x.teamId === s.teamId);
+      ok(!sameTeam || s.givePids.length >= sameTeam.givePids.length, '"需追加"方案确实比基础方案多要了你的筹码');
+    }
+    ok(searchTrades(tl, [], [], 3).length === 0, '未勾选筹码时不返回任何建议');
+    // 成交后筹码确实转移
+    const target = res[0];
+    const beforeIds = me.players.map((p) => p.id).join(',');
+    const tl2 = createRealLeague(seed + 4250);
+    tl2.userTeamId = 0;
+    applyTrade(tl2, 0, target.teamId, target.givePids, target.wantPids, target.givePickIdx, target.wantPickIdx);
+    ok(tl2.teams[0].players.map((p) => p.id).join(',') !== beforeIds || target.givePids.length === 0, '执行建议后阵容发生变化');
+  }
+
+  // ---------- v2.3.0 年龄口径 / 自由市场数组不可变 ----------
+  console.log('== v2.3.0 年龄口径与自由市场刷新 ==');
+  {
+    const al = createRealLeague(seed + 4251);
+    const all = [...al.teams.flatMap((t) => t.players), ...al.freeAgents];
+    const find = (n: string) => all.find((p) => p.name === n);
+    const reese = find('朱利安·里斯');
+    const wemby = find('维克托·文班亚马');
+    const flagg = find('库珀·弗拉格');
+    const castle = find('斯蒂芬·卡斯尔');
+    console.log(`  里斯 ${reese?.age}岁 · 文班 ${wemby?.age}岁 · 弗拉格 ${flagg?.age}岁 · 卡斯尔 ${castle?.age}岁`);
+    ok((reese?.age ?? 0) >= 22, `大四落选秀年龄修正（里斯 ${reese?.age} 岁，真实 23；旧公式算 19-22）`);
+    ok((wemby?.age ?? 0) >= 21 && (wemby?.age ?? 0) <= 23, `文班亚马年龄贴近真实（${wemby?.age} 岁，真实 22）`);
+    const avgAge = all.reduce((s, p) => s + p.age, 0) / all.length;
+    const young = all.filter((p) => p.age <= 19).length;
+    console.log(`  全联盟平均年龄 ${avgAge.toFixed(1)} 岁 · 19 岁以下 ${young} 人（占 ${(young / all.length * 100).toFixed(1)}%）`);
+    ok(avgAge > 24 && avgAge < 29, `全联盟平均年龄合理（${avgAge.toFixed(1)} 岁）`);
+    ok(young < all.length * 0.06, `"19 岁以下"比例正常（${young}/${all.length}）`);
+    // 自由市场数组：必须"换新数组"（useGame 的 tick 是浅拷贝，就地 splice 会让 UI 的 useMemo 不失效）
+    al.userTeamId = 0;
+    const cheap = [...al.freeAgents].sort((a, b) => a.ovr - b.ovr)[0];
+    const beforeRef = al.freeAgents;
+    const res = signFreeAgentNow(al, 0, cheap.id, 1, Math.max(250, askFor(cheap)));
+    console.log(`  自由市场签约：${res.ok ? '成功' : `失败（${res.note}）`}`);
+    if (res.ok) {
+      ok(al.freeAgents !== beforeRef, '签约后 freeAgents 换新数组（引用变化 → UI 立即刷新，无需切换页面）');
+      ok(!al.freeAgents.some((p) => p.id === cheap.id), '签约球员已从自由市场移除');
+    }
+    // 裁人同样要换新数组
+    const me0 = al.teams[0];
+    const cutTarget = [...me0.players].sort((a, b) => a.ovr - b.ovr).find((p) =>
+      me0.players.filter((q) => q.pos === p.pos).length > 1);
+    if (cutTarget) {
+      const faRef = al.freeAgents;
+      const done = cutPlayer(al, cutTarget.id);
+      ok(done && al.freeAgents !== faRef, '裁人后 freeAgents 换新数组（UI 立即刷新）');
+    }
+  }
+
+  console.log('== v2.3.0 手动轮换排班（每分钟稳定，攻防同一批人）==');
+  {
+    const rl = createRealLeague(seed + 4252);
+    const sas = rl.teams.find((t) => t.abbr === 'SAS')!;
+    const okc = rl.teams.find((t) => t.abbr === 'OKC')!;
+    // 复现用户场景：同一位置多人设自定义分钟（合计超 48 会按比例分配）
+    for (const t of [sas, okc]) {
+      t.players.forEach((p, i) => { p.min = i < 5 ? 36 : 12; });
+    }
+    const { result } = simulateGame(sas, okc, mulberry32(seed + 777), false, seed + 778);
+    const boxOf = (box: typeof result.awayBox) => box ?? [];
+    const lines = boxOf(result.awayBox);
+    const played = lines.filter((b) => b.min > 0);
+    console.log(`  SAS 上场 ${played.length} 人：${played.map((b) => {
+      const p = sas.players.find((q) => q.id === b.pid)!;
+      return `${p.name.slice(0, 4)}(${b.min}分/${b.fga}投)`;
+    }).join(' ')}`);
+    // 关键修复点：不再出现"上场 ≥12 分钟却 0 出手"的球员（旧实现里首发 SG 会 0 出手 36 分钟）
+    const zeroShot = played.filter((b) => b.min >= 12 && b.fga === 0 && b.fta === 0);
+    const names = zeroShot.map((b) => sas.players.find((q) => q.id === b.pid)?.name ?? '?');
+    ok(zeroShot.length === 0, `没有"上场 ≥12 分钟却 0 出手"的球员（异常 ${zeroShot.length} 人：${names.join('、')}）`);
+    // 出场时间符合设定（36 分钟档 → 约 24 分钟，因为同位置 2-3 人分摊）
+    const maxMin = Math.max(...played.map((b) => b.min));
+    ok(maxMin <= 48, `单人出场不超过 48 分钟（最高 ${maxMin}）`);
+    const totalMin = played.reduce((s, b) => s + b.min, 0);
+    ok(Math.abs(totalMin - 240) <= 12, `全队总分钟接近 240（${totalMin}）`);
+    // +/- 自洽：全队 +/- 合计 = 5 × 分差（每次得分给场上 5 人各记该分数）
+    const pmSum = played.reduce((s, b) => s + b.pm, 0);
+    const expect = 5 * (result.awayScore - result.homeScore);
+    const worst = Math.max(...played.map((b) => Math.abs(b.pm)));
+    console.log(`  SAS +/- 合计 ${pmSum}（理论 5×分差 = ${expect}）· 单人最大 |+/-| = ${worst}（比分 ${result.awayScore}-${result.homeScore}）`);
+    ok(Math.abs(pmSum - expect) <= 2, `+/- 合计与分差自洽（${pmSum} vs ${expect}）`);
+    // 不再出现"首发 -80 / 替补 +85"那种分裂：单人 |+/-| 不超过 4 倍分差 + 10
+    ok(worst <= Math.abs(result.awayScore - result.homeScore) * 4 + 10, `单人 +/- 不极端（最大 ${worst}）`);
   }
 
   console.log('== 自定义轮换冒烟（v0.3.1）==');

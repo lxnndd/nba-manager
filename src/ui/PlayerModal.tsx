@@ -71,15 +71,16 @@ export function PlayerModal({
                 ['得分', fmt1(pg.pts)], ['篮板', fmt1(pg.reb)], ['助攻', fmt1(pg.ast)],
                 ['抢断', fmt1(pg.stl)], ['盖帽', fmt1(pg.blk)], ['失误', fmt1(pg.tov)],
                 ['出场', fmt1(pg.min)], ['投篮%', fmt1(pg.fg)], ['三分%', fmt1(pg.tp)],
+                // v2.3.0：罚球/进攻板/防守板也做成同样的格子（此前是下面一行小字，样式与上面 9 格不统一）
+                ['罚球%', fmt1(pg.ft)],
+                ['进攻板', fmt1(player.stats.or / Math.max(1, player.gp))],
+                ['防守板', fmt1(player.stats.dr / Math.max(1, player.gp))],
               ].map(([label, v]) => (
                 <div className="stat-cell" key={String(label)}>
                   <div className="stat-v">{v}</div>
                   <div className="stat-l">{label}</div>
                 </div>
               ))}
-            </div>
-            <div className="mini-lines">
-              <div>罚球 {fmt1(pg.ft)}% · 进攻板 {fmt1(player.stats.or / Math.max(1, player.gp))} · 防守板 {fmt1(player.stats.dr / Math.max(1, player.gp))}</div>
             </div>
             <div className="sec-title" style={{ marginTop: 12 }}>18 项属性（总评 = 均值 + 长处补偿）</div>
             <div className="skill-groups">

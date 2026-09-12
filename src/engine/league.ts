@@ -688,6 +688,9 @@ export const ROSTER_MIN = 13;     // 交易/休赛期名单下限（保证 >12�
 export const ROSTER_MAX = 17;     // 交易/休赛期名单上限（开季前裁至 15）
 // v1.1 交易截止日：常规赛第 110 比赛日后（约全明星后）关闭玩家交易，季后赛/休赛期不再开放
 export const TRADE_DEADLINE_DAY = 110;
+// v2.3.0 单季出场数容差：赛程随机铺日 → 各队进度有差异，跨队转会后"已打 + 新队剩余"可能略超 82
+export const GP_CAP = 82;
+export const GP_TRADE_TOLERANCE = 6;
 
 export function payrollOf(players: Player[]): number {
   return players.reduce((s, p) => s + (p.salary || 0), 0);
@@ -778,18 +781,20 @@ export function evaluateTrade(
   }
   const gvPlayers = give.reduce((s, p) => s + tradeValue(p), 0);
   const wvPlayers = want.reduce((s, p) => s + tradeValue(p), 0);
-  // v2.0 单季 82 场上限：日历稀疏（每天 4-6 场）导致跨队转会后"已打场次 + 新队剩余场次"可超 82，
-  // 与球员"82/82 是 bug"的认知冲突 → 转会时校验，超限拒绝。
+  // v2.0 单季 82 场上限：日历稀疏（每天 4-6 场）导致跨队转会后"已打场次 + 新队剩余场次"可超 82。
+  // v2.3.0 修正：旧版直接以「已打 + 新队剩余 > 82」拒绝，但赛程是随机铺日的，各队进度天然有几天差异
+  //   （第 10 天时有的队打 12 场、有的只打 8 场），于是赛季早期就出现「OG·阿努诺比已打 12 场 →
+  //   拒绝（12+74=86）」这种没道理的理由。现在只有超出上限 GP_TRADE_TOLERANCE 场以上才拒绝。
   for (const p of give) {
-    const remain = 82 - playedCount(l, ai.id);
-    if (p.gp + remain > 82) {
-      return { accept: false, reason: `${ai.name} 拒绝：${p.name} 本赛季已打 ${p.gp} 场，转入后预计超 82 场上限（球员单赛季最多打 82 场）` };
+    const remain = GP_CAP - playedCount(l, ai.id);
+    if (p.gp + remain > GP_CAP + GP_TRADE_TOLERANCE) {
+      return { accept: false, reason: `${ai.name} 拒绝：${p.name} 本赛季已打 ${p.gp} 场，转入后预计超 ${GP_CAP} 场上限（球员单赛季最多打 ${GP_CAP} 场）` };
     }
   }
   for (const p of want) {
-    const remain = 82 - playedCount(l, me.id);
-    if (p.gp + remain > 82) {
-      return { accept: false, reason: `对方拒绝：${p.name} 本赛季已打 ${p.gp} 场，转入后预计超 82 场上限（球员单赛季最多打 82 场）` };
+    const remain = GP_CAP - playedCount(l, me.id);
+    if (p.gp + remain > GP_CAP + GP_TRADE_TOLERANCE) {
+      return { accept: false, reason: `对方拒绝：${p.name} 本赛季已打 ${p.gp} 场，转入后预计超 ${GP_CAP} 场上限（球员单赛季最多打 ${GP_CAP} 场）` };
     }
   }
   const gvPicks = givePickIdx.reduce((s, i) => s + pickValue(l, l.draftPool[i]), 0);
@@ -1068,6 +1073,132 @@ export function rejectTradeOffer(l: LeagueState, offerId: number): void {
   const ai = l.teams[of.fromTeamId];
   l.tradeOffers = l.tradeOffers.filter((o) => o.id !== offerId);
   l.news.push(`❌ 你拒绝了 ${ai?.name ?? '?'} 的交易报价。`);
+}
+
+// ---------- v2.3.0 交易搜索器 ----------
+// 玩家勾选自己愿意送出的筹码（1-N 名球员 / 选秀权）→ 遍历 29 支球队，搜索对方愿意接受的组合：
+//   ① 单换单 ② 对方「球员 + 选秀权」 ③ 对方打包两人 ④ 都不成立时自动尝试追加你的其他筹码
+//      （真实场景：AI 往往想要你好几个人，第 ④ 类结果会标注"需追加"）
+// 只返回 evaluateTrade 判定的可成交方案（含名单/薪资/Stepien/82 场等全部规则校验）。
+export interface TradeSuggestion {
+  teamId: number;
+  givePids: number[];       // 你送出（球员）
+  givePickIdx: number[];    // 你送出（选秀权池下标）
+  wantPids: number[];       // 你得到（球员）
+  wantPickIdx: number[];    // 你得到（选秀权池下标）
+  reason: string;           // AI 的接受理由（含估值明细）
+  gain: number;             // 你的净收益（得到 − 送出，估值口径）
+  needsMore: boolean;       // true = 需要在你勾选的筹码之外再追加（AI 想要你更多人）
+  note: string;             // 一句话说明
+}
+
+export function searchTrades(
+  l: LeagueState, givePids: number[], givePickIdx: number[], maxPerTeam = 2,
+): TradeSuggestion[] {
+  const me = l.teams[l.userTeamId];
+  if (!me) return [];
+  const mePlayers = new Map(me.players.map((p) => [p.id, p]));
+  const give = givePids.map((pid) => mePlayers.get(pid)).filter(Boolean) as Player[];
+  if (give.length !== givePids.length) return [];
+  // 选秀权估值只算一次（pickValue 内部要对 30 队排序，搜索循环里会调用上千次）
+  const pickVals = l.draftPool.map((pk) => pickValue(l, pk));
+  const pv = (i: number) => pickVals[i] ?? 0;
+  const gv = give.reduce((s, p) => s + tradeValue(p), 0) + givePickIdx.reduce((s, i) => s + pv(i), 0);
+  if (gv <= 0) return [];
+
+  const myPicks = l.draftPool.map((pk, i) => ({ pk, i })).filter((x) => x.pk.o === me.id);
+  // 备用筹码（用户没勾、但 AI 可能一并想要的）：先试最便宜的角色球员与最低价值的签
+  const sparePlayers = me.players
+    .filter((p) => !givePids.includes(p.id))
+    .sort((a, b) => tradeValue(a) - tradeValue(b))
+    .slice(0, 4);
+  const sparePicks = myPicks
+    .filter((x) => !givePickIdx.includes(x.i))
+    .sort((a, b) => pv(a.i) - pv(b.i))
+    .slice(0, 3);
+
+  const out: TradeSuggestion[] = [];
+  for (const ai of l.teams) {
+    if (ai.id === me.id) continue;
+    const aiPlayers = new Map(ai.players.map((p) => [p.id, p]));
+    const cands = ai.players
+      .map((p) => ({ p, v: tradeValue(p) }))
+      .filter((x) => x.v >= gv * 0.45 && x.v <= gv * 1.9)
+      .sort((a, b) => Math.abs(a.v - gv) - Math.abs(b.v - gv))
+      .slice(0, 8);
+    const candPicks = l.draftPool
+      .map((pk, i) => ({ pk, i, v: pv(i) }))
+      .filter((x) => x.pk.o === ai.id && x.v >= gv * 0.25 && x.v <= gv * 1.9)
+      .sort((a, b) => a.v - b.v)
+      .slice(0, 4);
+
+    const found: TradeSuggestion[] = [];
+    let extraTried = false;
+    const tryCombo = (wantPids: number[], wantPickIdx: number[], extraP: Player[] = [], extraK: number[] = []) => {
+      if (extraP.length || extraK.length) extraTried = true;
+      if (!wantPids.length && !wantPickIdx.length) return;
+      if (!givePids.length && !givePickIdx.length && !extraP.length && !extraK.length) return;
+      const gIds = [...givePids, ...extraP.map((p) => p.id)];
+      const gK = [...givePickIdx, ...extraK];
+      const verdict = evaluateTrade(l, me.id, ai.id, gIds, wantPids, gK, wantPickIdx);
+      if (!verdict.accept) return;
+      const gvAll = [...give, ...extraP].reduce((s, p) => s + tradeValue(p), 0) + gK.reduce((s, i) => s + pv(i), 0);
+      const wvAll = wantPids.reduce((s, pid) => s + tradeValue(aiPlayers.get(pid)!), 0)
+        + wantPickIdx.reduce((s, i) => s + pv(i), 0);
+      const names = [
+        ...wantPids.map((pid) => aiPlayers.get(pid)?.name ?? '?'),
+        ...wantPickIdx.map((i) => pickLabel(l, l.draftPool[i])),
+      ];
+      found.push({
+        teamId: ai.id,
+        givePids: gIds,
+        givePickIdx: gK,
+        wantPids,
+        wantPickIdx,
+        reason: verdict.reason,
+        gain: Math.round((wvAll - gvAll) * 100) / 100,
+        needsMore: extraP.length > 0 || extraK.length > 0,
+        note: `${ai.name} 愿意送出 ${names.join('、')}`,
+      });
+    };
+
+    // ① 单换单
+    for (const c of cands) tryCombo([c.p.id], []);
+    // ② 对方「球员 + 选秀权」
+    for (const c of cands.slice(0, 4)) for (const k of candPicks.slice(0, 2)) tryCombo([c.p.id], [k.i]);
+    // ③ 对方打包两名球员（清仓换你的即战力）
+    for (let i = 0; i < cands.length; i++) {
+      for (let j = i + 1; j < cands.length; j++) {
+        if (cands[i].v + cands[j].v > gv * 1.9) continue;
+        tryCombo([cands[i].p.id, cands[j].p.id], []);
+      }
+    }
+    // ④ 追加你的其他筹码：既做"当前筹码换不动"的兜底，也做"再加一点换更好的"升级方案
+    //    （真实场景：AI 常常想要你好几个人才肯放人 → 这类结果标 needsMore）
+    if ((givePids.length || givePickIdx.length) && !extraTried) {
+      const richer = found.filter((f) => !f.needsMore).length
+        ? ai.players
+          .map((p) => ({ p, v: tradeValue(p) }))
+          .filter((x) => x.v >= gv * 1.25)
+          .sort((a, b) => b.v - a.v)
+          .slice(0, 3)
+        : cands.slice(0, 3);
+      for (const extra of sparePlayers) {
+        for (const c of richer) tryCombo([c.p.id], [], [extra]);
+      }
+      for (const k of sparePicks.slice(0, 2)) {
+        for (const c of richer.slice(0, 2)) tryCombo([c.p.id], [], [], [k.i]);
+      }
+      if (sparePlayers.length >= 2) {
+        for (const c of richer.slice(0, 2)) tryCombo([c.p.id], [], sparePlayers.slice(0, 2));
+      }
+    }
+    const normal = found.filter((f) => !f.needsMore).sort((a, b) => b.gain - a.gain).slice(0, maxPerTeam);
+    const upgrade = found.filter((f) => f.needsMore).sort((a, b) => b.gain - a.gain).slice(0, 1); // 每队最多 1 条升级方案
+    out.push(...normal, ...upgrade);
+  }
+  out.sort((a, b) => Number(a.needsMore) - Number(b.needsMore) || b.gain - a.gain);
+  return out;
 }
 
 // 用户球队的下一场

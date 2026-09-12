@@ -82,16 +82,17 @@ function scorePm(
 // ---------- v2.3.0 队内战术地位（进攻第一/第二选择）----------
 // 真实 NBA 的进攻资源高度向核心集中（球队第一人 ~19-22 次出手，角色球员 ~8-11 次），
 // 而此前的权重只看位置与 OVR 线性值 → 全队出手过于平均（文班亚马 11.5 次 < 队友 13.6 次）。
-// 缓存 (队内人数 + 最高 OVR) 作签名，交易/成长后自动失效。
-const roleCache = new Map<number, { key: string; top: number; second: number }>();
+// ⚠️ 用 WeakMap 以 Team 对象为键：新开档/读档会创建全新 Team 对象 → 缓存自动失效。
+//    （早期版本用 team.id 作键，重开一局时会命中上一局的缓存 → 加成给错球员）
+const roleCache = new WeakMap<Team, { key: string; top: number; second: number }>();
 function coreBoost(team: Team, p: Player): number {
   const maxOvr = team.players.reduce((m, q) => Math.max(m, q.ovr), 0);
   const key = `${team.players.length}:${maxOvr}`;
-  let c = roleCache.get(team.id);
+  let c = roleCache.get(team);
   if (!c || c.key !== key) {
     const sorted = [...team.players].sort((a, b) => b.ovr - a.ovr || a.id - b.id);
     c = { key, top: sorted[0]?.id ?? -1, second: sorted[1]?.id ?? -1 };
-    roleCache.set(team.id, c);
+    roleCache.set(team, c);
   }
   // 系数标定依据（真实 2025-26 赛季场均得分 vs 引擎实测）：
   //   文班亚马 24.3 → 24.9 · 塔图姆 26.8 → 27.0 · 库里 24.5 → 24.8 · 布克 25.6 → 24.3
@@ -385,6 +386,56 @@ export function manualRotation(team: Team): boolean {
 // 自动档位（与 REST 引擎语义对齐）：首发约 36 分钟 / 第一替补 12 / 其余 0（垃圾时间才上）
 export const AUTO_MINUTES = [36, 12, 0];
 
+// ---------- v2.3.0 手动轮换：预计算"每分钟阵容表" ----------
+// ⚠️ 此前的实现是"每回合重新比较谁的剩余时间最多"，粒度太细：
+//    同一位置的两人会按「防守回合选 A、进攻回合选 B」交替上场，结果
+//    A 只在防守时在场（一辈子不投篮，实测 36 分钟 0 出手）、B 只在进攻时在场（包办全部出手）。
+//    现在改为预计算 48 分钟的固定排班（最大余额法交错），分钟级稳定：
+//    攻防两端的同一分钟用同一批人，出手机会自然均分。
+const planCache = new WeakMap<Team, { sig: string; plans: Record<string, Player[]> }>();
+
+function rotationSig(team: Team): string {
+  let s = String(team.players.length);
+  for (const p of team.players) s += `|${p.id}.${p.min ?? 'a'}.${p.injury ? p.injury.games : 0}`;
+  return s;
+}
+
+function rotationPlan(team: Team, pos: Pos): Player[] {
+  const sig = rotationSig(team);
+  let entry = planCache.get(team);
+  if (!entry || entry.sig !== sig) {
+    entry = { sig, plans: {} };
+    planCache.set(team, entry);
+  }
+  const hit = entry.plans[pos];
+  if (hit) return hit;
+  const list = available(posDepth(team, pos));
+  const plan: Player[] = [];
+  if (list.length === 0) {
+    entry.plans[pos] = plan;
+    return plan;
+  }
+  const targets = list.map((p) => Math.max(0, targetMinutes(p, team)));
+  const sum = targets.reduce((a, b) => a + b, 0);
+  if (sum <= 0) {
+    for (let m = 0; m < 48; m++) plan.push(list[0]); // 全员无目标时间 → 首发打满（旧行为）
+  } else {
+    const acc = list.map(() => 0);
+    const step = targets.map((t) => t / sum);
+    for (let m = 0; m < 48; m++) {
+      let best = 0;
+      for (let i = 0; i < list.length; i++) {
+        acc[i] += step[i];
+        if (acc[i] > acc[best]) best = i;
+      }
+      plan.push(list[best]);
+      acc[best] -= 1;
+    }
+  }
+  entry.plans[pos] = plan;
+  return plan;
+}
+
 // 手动模式球员目标分钟（p.min ?? 当前轮换深度默认档）
 export function targetMinutes(p: Player, team: Team): number {
   if (p.min != null) return p.min;
@@ -405,40 +456,29 @@ export function manualStarter(team: Team, pos: Pos): Player | undefined {
   return best;
 }
 
-// 每分钟场上阵容（lines=本场逐回合累计，unit=每回合原始计数 ≈ 分钟换算，手动模式按剩余目标贪心）
+// 每分钟场上阵容（手动模式查"每分钟排班表"，自动模式沿用休息窗口）
 function sideLineup(team: Team, minute: number, diff: number, lines?: Map<number, BoxLine>, unit = 1): Player[] {
   const garbage = Math.abs(diff) >= 14 && minute >= 40;
+  const POS5: Pos[] = ['PG', 'SG', 'SF', 'PF', 'C'];
   if (manualRotation(team)) {
+    const m = Math.max(0, Math.min(47, minute));
+    if (garbage) {
+      // 垃圾时间：优先上"未安排时间"的边缘人（第三阵容）
+      const out: Player[] = [];
+      for (const pos of POS5) {
+        const list = available(posDepth(team, pos));
+        if (!list.length) continue;
+        const third = list.filter((p) => Math.max(0, targetMinutes(p, team)) === 0);
+        const pool = third.length ? third : list;
+        out.push(pool[Math.floor(minute / 2) % pool.length] ?? list[0]);
+      }
+      return out;
+    }
     const out: Player[] = [];
-    const taken = new Set<number>();
-    for (const pos of ['PG', 'SG', 'SF', 'PF', 'C'] as Pos[]) {
-      const list = depthList(team, pos, taken);
-      if (!list.length) continue;
-      let pool = list;
-      if (garbage) {
-        // 垃圾时间优先上"未安排时间"的边缘人（第三阵容）
-        const third = list.filter((p) => (p.min ?? 0) === 0);
-        if (third.length) pool = third;
-      }
-      // 候选 = 有目标时间的球员；该位置无人设目标 → 整列兜底
-      const active = pool.filter((p) => (p.min ?? 0) > 0);
-      const cands = active.length ? active : pool;
-      let best: Player | null = null;
-      let bestRem = Number.NEGATIVE_INFINITY;
-      // 第一轮：还欠时间（remaining>0）的人里挑最欠的
-      for (const p of cands) {
-        const rem = targetMinutes(p, team) * unit - (lines?.get(p.id)?.min ?? 0);
-        if (rem > 0 && rem > bestRem) { bestRem = rem; best = p; }
-      }
-      if (!best) {
-        // 全部打满（或全无目标）：挑超时最少者（主力吸收加时/剩余时间）
-        for (const p of cands) {
-          const rem = targetMinutes(p, team) * unit - (lines?.get(p.id)?.min ?? 0);
-          if (rem > bestRem) { bestRem = rem; best = p; }
-        }
-      }
-      out.push(best ?? list[0]);
-      taken.add((best ?? list[0]).id);
+    for (const pos of POS5) {
+      const plan = rotationPlan(team, pos);
+      const pick = plan[m];
+      if (pick) out.push(pick);
     }
     return out;
   }
