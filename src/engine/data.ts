@@ -189,7 +189,9 @@ export const NATION_POOLS: NationPool[] = [
     last: [['Bitadze', '比塔泽'], ['Mamukelashvili', '马穆克拉什维利'], ['Shengelia', '申格利亚'], ['Andronikashvili', '安德罗尼卡什维利'], ['Sanadze', '萨纳泽'], ['Tsintsadze', '钦察泽'], ['Burjanadze', '布尔贾纳泽'], ['Jintcharadze', '金查拉泽'], ['Shermadini', '谢尔马迪尼'], ['Kvesitadze', '克韦西塔泽']],
   },
 ];
-// ---------- 英文姓名池（美国新秀用；真实 NBA 美国球员就是英文名） ----------
+// ---------- 英文姓名池（美国新秀用）+ v2.5.0 中文译名对照 ----------
+// v2.5.0：新秀名字**全部汉化**——美国新秀也用中文译名显示（如 Jalen Carter → 杰伦·卡特）；
+// 英文原值仍用于内部防重与唯一性校验。
 export const FIRST_EN = [
   'Jalen', 'Tyrese', 'Ja', 'Luka', 'Devin', 'Shai', 'Anthony', 'Trae', 'Zion', 'Paolo',
   'Jayson', 'Jaylen', 'Evan', 'Chet', 'Amen', 'Ausar', 'Brandon', 'Cam', 'Cade', 'Collin',
@@ -206,3 +208,43 @@ export const LAST_EN = [
   'Spencer', 'Stewart', 'Stone', 'Taylor', 'Terry', 'Thomas', 'Tucker', 'Vaughn', 'Walker', 'Ward',
   'Warren', 'Watson', 'Weaver', 'Webb', 'Wells', 'Williams', 'Wilson', 'Wright', 'Young', 'Zimmerman',
 ];
+
+// v2.5.0：英文名 → 中文译名映射（让美国新秀也显示中文名）
+export const FIRST_EN_ZH: Record<string, string> = {
+  Jalen: '杰伦', Tyrese: '泰瑞斯', Ja: '贾', Luka: '卢卡', Devin: '德文', Shai: '谢伊',
+  Anthony: '安东尼', Trae: '特雷', Zion: '锡安', Paolo: '保罗', Jayson: '杰森', Jaylen: '杰伦',
+  Evan: '埃文', Chet: '切特', Amen: '阿门', Ausar: '奥萨尔', Brandon: '布兰登', Cam: '卡姆',
+  Cade: '凯德', Collin: '科林', Dereck: '德里克', Desmond: '德斯蒙德', Donovan: '多诺万',
+  Franz: '弗朗茨', Grant: '格兰特', Isaiah: '以赛亚', Jabari: '贾巴里', Keegan: '基根',
+  Mark: '马克', Miles: '迈尔斯', Nicolas: '尼古拉', Oscar: '奥斯卡', Quentin: '昆汀',
+  Reed: '里德', Scoot: '斯库特', Tari: '塔里', Victor: '维克托', Walker: '沃克', Xavier: '泽维尔',
+};
+
+export const LAST_EN_ZH: Record<string, string> = {
+  Anderson: '安德森', Bailey: '贝利', Banks: '班克斯', Barnes: '巴恩斯', Bates: '贝茨', Bell: '贝尔',
+  Booker: '布克', Brooks: '布鲁克斯', Carter: '卡特', Clarke: '克拉克', Cole: '科尔',
+  Collins: '柯林斯', Crawford: '克劳福德', Daniels: '丹尼尔斯', Davis: '戴维斯', Ellis: '埃利斯',
+  Evans: '埃文斯', Foster: '福斯特', Franklin: '富兰克林', Garrett: '加勒特', Gibson: '吉布森',
+  Grant: '格兰特', Griffin: '格里芬', Hall: '霍尔', Harris: '哈里斯', Hayes: '海斯',
+  Hendricks: '亨德里克斯', Howard: '霍华德', Hunter: '亨特', Jackson: '杰克逊', James: '詹姆斯',
+  Jenkins: '詹金斯', Johnson: '约翰逊', Jones: '琼斯', Keller: '凯勒', King: '金', Lopez: '洛佩斯',
+  Martin: '马丁', Miller: '米勒', Mitchell: '米切尔', Moore: '摩尔', Morgan: '摩根',
+  Morris: '莫里斯', Murphy: '墨菲', Nelson: '尼尔森', Owens: '欧文斯', Parker: '帕克',
+  Perry: '佩里', Porter: '波特', Powell: '鲍威尔', Ramsey: '拉姆齐', Reed: '里德', Reese: '里斯',
+  Rice: '赖斯', Richards: '理查兹', Roberts: '罗伯茨', Robinson: '罗宾逊', Ross: '罗斯',
+  Russell: '拉塞尔', Sanders: '桑德斯', Spencer: '斯宾塞', Stewart: '斯图尔特', Stone: '斯通',
+  Taylor: '泰勒', Terry: '特里', Thomas: '托马斯', Tucker: '塔克', Vaughn: '沃恩', Walker: '沃克',
+  Ward: '沃德', Warren: '沃伦', Watson: '沃森', Weaver: '韦弗', Webb: '韦布', Wells: '韦尔斯',
+  Williams: '威廉姆斯', Wilson: '威尔逊', Wright: '赖特', Young: '杨', Zimmerman: '齐默尔曼',
+};
+
+// 英文姓名 → 中文译名（"名·姓"）；用于新秀汉化与旧存档迁移
+export function enNameToZh(en: string): string {
+  const parts = String(en).replace(/ Jr\.$/, '').split(' ');
+  const f = parts[0] ?? '';
+  const l = parts.slice(1).join(' ');
+  const fz = FIRST_EN_ZH[f];
+  const lz = LAST_EN_ZH[l];
+  if (!fz && !lz) return en; // 两边都认不出（真实球员名等）→ 原样返回，避免误改
+  return `${fz ?? f}·${lz ?? l}`;
+}

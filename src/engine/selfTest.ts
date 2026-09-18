@@ -2,7 +2,7 @@
 // 验证：名单结构、比分分布、全季推进、季后赛、赛季奖项、休赛期（FA/AI交易）、存档迁移
 import { createLeague, createRealLeague, repositionPlayer, bodyKeys, genRookie, genDraftClass, genFreeAgent, TEAM_STYLES, COACH_STYLES, applyTeamStyle, applyCoachStyle, assignTags, calcOvr, SKILL_KEYS, genSkills, POS_SEC } from './gen';
 import { simulateGame, bondMods, teamEffMods } from './sim';
-import { simDay, runPlayoffRound, simPlayoffGame, playoffChampion, evaluateTrade, applyTrade, standings, leaders, nextGameOf, playedCount, migrateSave, teamStrength, pickValue, tradeValue, ROSTER_MAX, payrollOf, SALARY_CAP, TAX_LINE, refreshPlayoffPlaceholders, tryAITradeOfferToUser, acceptTradeOffer, rejectTradeOffer, pickLabel, lotteryOrder, rookieScaleSalary, searchTrades, GP_CAP, GP_TRADE_TOLERANCE } from './league';
+import { simDay, runPlayoffRound, simPlayoffGame, playoffChampion, evaluateTrade, applyTrade, standings, leaders, nextGameOf, playedCount, migrateSave, teamStrength, pickValue, tradeValue, ROSTER_MAX, payrollOf, SALARY_CAP, TAX_LINE, refreshPlayoffPlaceholders, tryAITradeOfferToUser, acceptTradeOffer, rejectTradeOffer, pickLabel, lotteryOrder, rookieScaleSalary, searchTrades, GP_CAP, GP_TRADE_TOLERANCE, teamPhase, phaseLabel, phasePlayerWeight, phasePickWeight } from './league';
 import { computeSeasonAwards, computeFinalsMVP } from './awards';
 import { rollPostGameEvent, resolveTeamEvent } from './events';
 import type { Player } from './types';
@@ -64,6 +64,11 @@ function runOffseasonFlow(l: LeagueState, tag: string, offerTest: boolean): void
   ok(!!aw && aw.allDefense?.length === 2 && aw.allDefense.every((t) => t.length === 5), `${tag} All-Defense 两阵 ×5`);
   const defIds = aw?.allDefense.flat().map((e) => e.playerId) ?? [];
   ok(new Set(defIds).size === defIds.length, `${tag} All-Defense 10 人无重复`);
+  // v2.5.0：新秀一阵/二阵各 5 人（此前二阵常常只剩 4 人）
+  ok(!!aw && aw.allRookie?.length === 2, `${tag} 最佳新秀阵容分两阵`);
+  ok(!!aw && aw.allRookie.every((t) => t.length === 5), `${tag} 新秀一阵/二阵各 5 人（${aw?.allRookie.map((t) => t.length).join(' / ')}）`);
+  const rkIds = aw?.allRookie.flat().map((e) => e.playerId) ?? [];
+  ok(new Set(rkIds).size === rkIds.length, `${tag} 新秀两阵 10 人无重复`);
   if (aw?.sixth) {
     const p = l.teams[aw.sixth.teamId].players.find((q) => q.id === aw.sixth!.playerId)!;
     ok(p.starts < p.gp / 2, `${tag} 第六人非首发（首发 ${p.starts}/${p.gp}）`);
@@ -76,8 +81,83 @@ function runOffseasonFlow(l: LeagueState, tag: string, offerTest: boolean): void
   const fmName = fm ? l.teams[fm.teamId].players.find((q) => q.id === fm.playerId)?.name : null;
   console.log(`  ${tag} 奖项: MVP ${mvpName} · DPOY ${aw?.dpoy ? l.teams[aw.dpoy.teamId].players.find((q) => q.id === aw.dpoy!.playerId)?.name : '-'} · 常规 FMVP ${fmName}`);
 
+  // ---------- v2.5.0：常规赛 / 季后赛数据分离 ----------
+  {
+    const allP = l.teams.flatMap((t) => t.players);
+    const poPlayed = allP.filter((p) => p.poGp > 0);
+    const maxGp = Math.max(...allP.map((p) => p.gp));
+    // 跨队累计（赛季中被交易）会让个人总出场略超 82；92 场那种"季后赛污染常规赛"必须绝迹
+    ok(maxGp <= 88, `${tag} 常规赛出场未被季后赛污染（最大 ${maxGp}，上限 82 + 交易容差）`);
+    ok(poPlayed.length > 0, `${tag} 季后赛数据独立累计（出场 ${poPlayed.length} 人）`);
+    ok(allP.every((p) => p.poGp <= 40), `${tag} 季后赛出场数合理（最大 ${Math.max(...allP.map((p) => p.poGp))}）`);
+    ok(allP.every((p) => Object.keys(p.poStats ?? {}).length > 0), `${tag} 人人带 poStats 字段（含未出场者）`);
+    const poTop = [...poPlayed].sort((a, b) => b.poStats.pts / Math.max(1, b.poGp) - a.poStats.pts / Math.max(1, a.poGp))[0];
+    ok(!!poTop && poTop.poStats.pts > 0, `${tag} 季后赛场均榜可算（${poTop?.name} ${(poTop!.poStats.pts / Math.max(1, poTop!.poGp)).toFixed(1)} 分 / ${poTop?.poGp} 场）`);
+    const poLeaders = leaders(l, 'pts', 1, true);
+    ok(poLeaders.length > 0 && poLeaders[0].value > 0, `${tag} 季后赛数据榜可查（榜首 ${poLeaders[0]?.player.name} ${poLeaders[0]?.value.toFixed(1)}）`);
+  }
+
+  // ---------- v2.5.0：球队三状态（争冠 / 补强 / 重建）----------
+  {
+    const cnt = (ph: string) => l.teams.filter((t) => teamPhase(t) === ph).length;
+    console.log(`  ${tag} 球队状态：争冠 ${cnt('contender')} · 补强 ${cnt('retool')} · 重建 ${cnt('rebuild')}`);
+    ok(cnt('contender') + cnt('retool') + cnt('rebuild') === 30, `${tag} 30 队都有交易状态`);
+    const mism: string[] = [];
+    for (const t of l.teams) {
+      const top5 = [...t.players].sort((a, b) => b.ovr - a.ovr).slice(0, 5);
+      const avg = top5.length ? top5.reduce((s, p) => s + p.ovr, 0) / top5.length : 0;
+      const want = avg > 85 ? 'contender' : avg >= 80 ? 'retool' : 'rebuild';
+      if (teamPhase(t) !== want) mism.push(`${t.abbr}(${avg.toFixed(1)})`);
+    }
+    ok(mism.length === 0, `${tag} 状态判定 = 首发 5 人均值阈值（异常 ${mism.length}）`);
+    const young = { age: 22, exp: 1 } as Player;
+    const vet = { age: 32, exp: 9 } as Player;
+    ok(phasePlayerWeight(young, 'rebuild') > phasePlayerWeight(young, 'contender'), `${tag} 年轻球员在重建队更值钱`);
+    ok(phasePlayerWeight(vet, 'contender') > phasePlayerWeight(vet, 'rebuild'), `${tag} 老将在争冠队更值钱`);
+    ok(phasePickWeight('rebuild') > phasePickWeight('retool') && phasePickWeight('retool') > phasePickWeight('contender'), `${tag} 选秀权估值 重建 > 补强 > 争冠`);
+    console.log(`  ${tag} 阶段标签：${(['contender', 'retool', 'rebuild'] as const).map((p) => phaseLabel(p)).join(' / ')}`);
+  }
+
+  // ---------- v2.5.0：休赛期账面处理快照（合同年递减 / 伤病跨季康复）----------
+  const contractBefore = new Map<number, number>();
+  for (const t of l.teams) for (const p of t.players) contractBefore.set(p.id, p.contractYears);
+  for (const t of l.teams) {
+    const p = t.players[0];
+    if (p) p.injury = { type: '脚踝扭伤', games: 12 };
+  }
+  const injuredBefore = l.teams.reduce((s, t) => s + t.players.filter((p) => p.injury).length, 0);
+
   beginOffseason(l);
   ok(l.offseason && l.offseasonStep === 1, `${tag} 休赛期状态`);
+  // v2.5.0：伤病跨季康复 + 合同年递减
+  {
+    const injuredAfter = l.teams.flatMap((t) => t.players).filter((p) => p.injury).length;
+    ok(injuredBefore > 0 && injuredAfter === 0, `${tag} 伤病跨赛季全部康复（${injuredBefore} → ${injuredAfter}）`);
+    const still = l.teams.flatMap((t) => t.players).filter((p) => contractBefore.has(p.id));
+    // 只有"未到期"（减 1 后仍 > 0）的球员能精确校验递减；到期者会被放走或自动续约
+    const notDue = still.filter((p) => (contractBefore.get(p.id) ?? 0) - 1 >= 1);
+    const bad = notDue.filter((p) => p.contractYears !== (contractBefore.get(p.id) ?? 0) - 1);
+    console.log(`  ${tag} 合同年递减：校验 ${notDue.length} 人，异常 ${bad.length}`);
+    ok(bad.length === 0, `${tag} 合同年限随赛季 -1（异常 ${bad.length}: ${bad.slice(0, 3).map((p) => `${p.name} ${contractBefore.get(p.id)}→${p.contractYears}`).join(' / ')}）`);
+    // v2.5.0：到期球员必须被处理——要么放走（进 FA），要么自动续约，队内不允许留下 0 年合同
+    const zeroYear = l.teams.flatMap((t) => t.players).filter((p) => p.contractYears <= 0);
+    ok(zeroYear.length === 0, `${tag} 到期合同已处理（队内 0 年合同 ${zeroYear.length} 人）`);
+    const expiredNews = l.news.filter((n) => n.includes('合同到期未续约')).length;
+    console.log(`  ${tag} 合同到期放走 ${expiredNews} 人（每队 ≥13 人 + 每位置 ≥1 人安全阀）`);
+  }
+  // v2.5.0：乐透抽签结果（含赔率与 top4，供"原属球队 → 现属球队"展示）+ 抽签后 3 天交易窗口
+  {
+    const lt = l.lottery;
+    // order/odds 覆盖 30 队（乐透区 14 队抽前 4，其余按战绩倒序），lotteryIds = 乐透区 14 队
+    ok(!!lt && lt.order.length === 30 && lt.odds.length === 30 && lt.top4.length === 4, `${tag} 乐透抽签结果完整（${lt?.order.length} 队 / top4 ${lt?.top4.length}）`);
+    ok(!!lt && lt.lotteryIds.length === 14, `${tag} 乐透区 14 队（${lt?.lotteryIds.length}）`);
+    ok(!!lt && new Set(lt.order).size === 30, `${tag} 30 队顺位无重复`);
+    ok(!!lt && lt.order.every((id) => id >= 0 && id < 30), `${tag} 乐透顺序为有效球队 id`);
+    ok(!!lt && lt.top4.every((id) => lt.lotteryIds.includes(id)), `${tag} 前 4 顺位都出自乐透区`);
+    ok(l.offseasonTradeDays === 3, `${tag} 抽签后开启 3 天交易窗口（${l.offseasonTradeDays} 天）`);
+    const owners = new Set(l.draftPool.filter((pk) => pk.year === l.draft?.year && pk.round === 1).map((pk) => pk.o));
+    console.log(`  ${tag} 乐透：状元签 ${l.teams[lt?.order[0] ?? 0]?.abbr} · 首轮签归属队 ${owners.size} 支（可显示原属 → 现属）`);
+  }
   ok(l.history.length > 0 && l.history[l.history.length - 1].season === l.season, `${tag} history 入账`);
   ok(l.history[l.history.length - 1].finalsMvpId === fm?.playerId, `${tag} history FMVP 记录`);
   // v2.0 休赛期重置字段
@@ -114,6 +194,32 @@ function runOffseasonFlow(l: LeagueState, tag: string, offerTest: boolean): void
     ok(me.players.length <= ROSTER_MAX, `${tag} 签约后名单 ≤${ROSTER_MAX}`);
     ok(cheap.contractYears === 2, `${tag} 合同年限写入`);
   }
+  // ---------- v2.5.0：交易市场锁定（锁定的球员不会被 AI 报价）----------
+  if (offerTest) {
+    l.userTeamId = 0;
+    const me = l.teams[0];
+    l.lockedPids = me.players.map((p) => p.id);
+    const lockedSet = new Set(l.lockedPids);
+    let hits = 0, offers = 0;
+    for (let i = 0; i < 80; i++) {
+      l.tradeOffers = [];
+      if (!tryAITradeOfferToUser(l, mulberry32(9001 + i * 37))) continue;
+      offers++;
+      for (const of of l.tradeOffers) hits += of.givePids.filter((pid) => lockedSet.has(pid)).length;
+    }
+    console.log(`  ${tag} 锁定测试：全员锁定 → ${offers} 条报价，涉及锁定球员 ${hits} 次`);
+    ok(hits === 0, `${tag} 锁定球员不会被 AI 报价（越权 ${hits} 次）`);
+    // 反证：解锁后能正常收到报价，说明锁定确实在起作用
+    l.lockedPids = [];
+    let got = 0;
+    for (let i = 0; i < 150; i++) {
+      l.tradeOffers = [];
+      if (tryAITradeOfferToUser(l, mulberry32(7001 + i * 53))) got++;
+    }
+    console.log(`  ${tag} 解锁后 150 次尝试收到报价 ${got} 条`);
+    ok(got > 0, `${tag} 解锁后可正常收到 AI 报价（${got} 条）`);
+    l.tradeOffers = [];
+  }
   simulateOffseasonAI(l);
   simulateAIOffseasonTrades(l);
   const trades = l.news.filter((n) => n.includes('交易：')).length;
@@ -126,6 +232,10 @@ function runOffseasonFlow(l: LeagueState, tag: string, offerTest: boolean): void
   ok(l.schedule.length === 170, `${tag} 新赛程 170 天`);
   checkRoster(l, `${tag} 新赛季`, 15); // 开季裁至 15
   ok(l.teams.every((t) => t.players.every((p) => p.gp === 0 && p.starts === 0)), `${tag} 赛季数据重置`);
+  // v2.5.0：新赛季常规赛/季后赛数据同步归零，休赛期交易窗口关闭
+  ok(l.teams.every((t) => t.players.every((p) => p.poGp === 0 && p.poStats.pts === 0 && p.poStats.min === 0)), `${tag} 季后赛数据同步归零`);
+  ok(l.offseasonTradeDays === 0, `${tag} 休赛期交易窗口已关闭（${l.offseasonTradeDays}）`);
+  ok(Array.isArray(l.lockedPids), `${tag} 锁定名单字段常驻（跨赛季保留 ${l.lockedPids.length} 人）`);
   // v2.3：选秀权池 = 每队未来 3 年 × 首轮/次轮 = 180 枚；年份窗口滚动
   ok(l.draftPool.length === 180, `${tag} 选秀权池 180 枚（30 队 × 3 年 × 2 轮，实际 ${l.draftPool.length}）`);
   ok(l.draftPool.every((pk) => pk.year >= l.year + 1 && pk.year <= l.year + 3), `${tag} 签的年份都在未来 3 年内`);
@@ -340,8 +450,12 @@ function run(): void {
     console.log(`  国际新秀样例：${intl.slice(0, 5).map((p) => `${p.nation} ${p.name}`).join(' · ')}`);
     const usNames = dc.filter((p) => p.nation === '美国').map((p) => p.name);
     const cnNames = dc.filter((p) => p.nation === '中国').map((p) => p.name);
-    ok(usNames.every((n) => /^[A-Za-z][A-Za-z. ]+$/.test(n)), '美国新秀用英文名（不再中文名标"美国"）');
+    // v2.5.0：新秀名字全部汉化（美国新秀也显示中文译名，如 Jalen Carter → 杰伦·卡特）
+    ok(usNames.every((n) => /[\u4e00-\u9fff]/.test(n)), `美国新秀名字已汉化（样例：${usNames.slice(0, 3).join('、')}）`);
+    ok(usNames.every((n) => !/^[A-Za-z]/.test(n)), '美国新秀不再出现纯英文名');
     ok(cnNames.every((n) => /[\u4e00-\u9fff]/.test(n)), '中国新秀用中文名');
+    const asciiNames = dc.filter((p) => !/[\u4e00-\u9fff]/.test(p.name));
+    ok(asciiNames.length === 0, `80 名新秀名字全部含中文（纯英文 ${asciiNames.length} 人）`);
     // 国际新秀名字已译为中文（含间隔号"，"或纯汉字，如"维克托·文班亚马"/"八村塁"）
     ok(intl.every((p) => /^[\u4e00-\u9fff·．]+$/.test(p.name)), `国际新秀名字已译成中文（${intl[0]?.name}…）`);
     ok(new Set(dc.map((p) => p.name)).size === 80, '80 人名字无重复');
@@ -517,8 +631,8 @@ function run(): void {
     const jw = find('杰伦·威廉姆斯'), ac = find('亚历克斯·卡鲁索'), jt = find('杰森·塔图姆');
     const lbj = find('勒布朗·詹姆斯'), jok = find('尼古拉·约基奇');
     console.log(`  杰伦·威廉姆斯 ${jw?.pos}/${jw?.secPos} · 卡鲁索 ${ac?.pos}/${ac?.secPos} · 塔图姆 ${jt?.pos}/${jt?.secPos} · 詹姆斯 ${lbj?.pos}/${lbj?.secPos} · 约基奇 ${jok?.pos}/${jok?.secPos}`);
-    // v2.4.0：位置严格照搬 2K27 的 positions 数组（用户指定）——以下断言即"数据源原值"
-    ok(jw?.pos === 'C' && jw?.secPos === 'PF', `杰伦·威廉姆斯 = 2K 原值 C/PF（${jw?.pos}/${jw?.secPos}）`);
+    // v2.5.0：用户指定例外——杰伦·威廉姆斯改为 SG/SF（2K 原值为 C/PF），其余照搬 2K
+    ok(jw?.pos === 'SG' && jw?.secPos === 'SF', `杰伦·威廉姆斯 = SG/SF（用户指定，${jw?.pos}/${jw?.secPos}）`);
     ok(ac?.pos === 'SF' && ac?.secPos === 'PG', `卡鲁索 = 2K 原值 SF/PG（${ac?.pos}/${ac?.secPos}）`);
     ok(jt?.pos === 'PF' && jt?.secPos === 'SF', '塔图姆 = 2K 原值 PF/SF');
     ok(lbj?.pos === 'PF' && lbj?.secPos === 'SF', '詹姆斯 = 2K 原值 PF/SF');
@@ -631,8 +745,8 @@ function run(): void {
     ok(nd2.every((p) => p.weight && p.wingspan), '下一届新秀体测数据齐全');
   }
 
-  // ---------- v2.3.0 乐透抽签 / Stepien 规则 / 新秀薪资阶位 ----------
-  console.log('== v2.3.0 选秀制度（乐透抽签 · Stepien · 新秀薪资）==');
+  // ---------- v2.3.0 乐透抽签 / 新秀薪资阶位（Stepien 规则已于 v2.5.0 移除）----------
+  console.log('== v2.3.0 选秀制度（乐透抽签 · 新秀薪资阶位；Stepien 已移除）==');
   {
     // 乐透抽签：战绩最差不再稳拿状元
     const ll = createRealLeague(seed + 4247);
@@ -656,7 +770,7 @@ function run(): void {
     ok(share > 0.07 && share < 0.25, `最差队状元概率接近理论 14%（实测 ${(share * 100).toFixed(1)}%）`);
     ok(winners.size >= 3, `状元签会落在多支球队（${winners.size} 支）`);
 
-    // Stepien 规则：不能连续两年没有首轮签
+    // v2.5.0：Stepien 规则（禁止连续两年无首轮签）已按用户要求彻底移除
     const sl2 = createRealLeague(seed + 4248);
     sl2.userTeamId = 0;
     const myFirsts = sl2.draftPool.map((pk, i) => ({ pk, i })).filter((x) => x.pk.o === 0 && x.pk.round === 1);
@@ -664,10 +778,10 @@ function run(): void {
     const target = sl2.teams[1].players[0];
     const vAll = evaluateTrade(sl2, 0, 1, [], [target.id], myFirsts.map((x) => x.i), []);
     console.log(`  送出全部 ${myFirsts.length} 枚首轮：${vAll.accept ? '接受' : '拒绝'} — ${vAll.reason.slice(0, 56)}`);
-    ok(!vAll.accept && vAll.reason.includes('Stepien'), 'Stepien 规则拦截"连续两年没有首轮签"的交易');
+    ok(!vAll.reason.includes('Stepien'), 'Stepien 规则已移除：送走全部首轮不再被该规则拦截');
     const vOne = evaluateTrade(sl2, 0, 1, [], [target.id], [myFirsts[0].i], []);
     console.log(`  只送出 ${myFirsts[0].pk.year} 一枚：${vOne.accept ? '接受' : '拒绝'} — ${vOne.reason.slice(0, 48)}`);
-    ok(!vOne.reason.includes('Stepien'), '只送一枚首轮不触发 Stepien 规则');
+    ok(!vOne.reason.includes('Stepien'), '只送一枚首轮同样无 Stepien 相关提示');
 
     // 新秀薪资阶位（Rookie Scale）
     console.log(`  首轮薪资阶位：1 号签 ${rookieScaleSalary(1)} 万 · 15 号 ${rookieScaleSalary(15)} 万 · 30 号 ${rookieScaleSalary(30)} 万`);
@@ -826,7 +940,7 @@ function run(): void {
     console.log(`  德雷蒙德·格林 ${dray?.pos}/${dray?.secPos} · 杰伦·威廉姆斯 ${jw2?.pos}/${jw2?.secPos} · 卡鲁索 ${ac2?.pos}/${ac2?.secPos}`);
     // v2.4.0：位置严格照搬 2K27 的 positions 数组（用户指定，不再推断/修正）
     ok(dray?.pos === 'PF' && dray?.secPos === 'C', `德雷蒙德·格林严格按 2K = PF/C（${dray?.pos}/${dray?.secPos}）`);
-    ok(jw2?.pos === 'C' && jw2?.secPos === 'PF', `杰伦·威廉姆斯严格按 2K = C/PF（${jw2?.pos}/${jw2?.secPos}）`);
+    ok(jw2?.pos === 'SG' && jw2?.secPos === 'SF', `杰伦·威廉姆斯 = SG/SF（用户指定例外，${jw2?.pos}/${jw2?.secPos}）`);
     ok(ac2?.pos === 'SF' && ac2?.secPos === 'PG', `卡鲁索严格按 2K = SF/PG（${ac2?.pos}/${ac2?.secPos}）`);
     // 主副位置不再强制相邻（2K 数据本身会出现 SF/PG、PG/C 这类组合）
     const samePos = all2.filter((p) => p.pos === p.secPos);
@@ -1158,6 +1272,13 @@ function runReal(): void {
   // 中文名应已内置（保留"OG/V.J."这类常见字母缩写前缀是正常的）
   const noZh = [...l.teams.flatMap((t) => t.players)].filter((p) => !/[\u4e00-\u9fff]/.test(p.name));
   ok(noZh.length === 0, `真实名单球员名均含中文（异常 ${noZh.length}: ${noZh.slice(0, 3).map((p) => p.name).join('/')}）`);
+  // v2.5.0：杨瀚森 = 2005 年生（出生年校正，此前年龄偏大）
+  const yhs = findPlayer(l, '杨瀚森');
+  console.log(`  杨瀚森：${yhs ? `${yhs.p.age}岁 · ${yhs.p.pos} · OVR ${yhs.p.ovr} · ${yhs.abbr}` : '不在名单'}`);
+  if (yhs) ok(yhs.p.age <= 21, `杨瀚森年龄按 2005 年生修正（${yhs.p.age}岁）`);
+  // v2.5.0：杰伦·威廉姆斯 = 分卫/小前（用户指定例外）
+  const jwA = findPlayer(l, '杰伦·威廉姆斯');
+  ok(jwA?.p.pos === 'SG' && jwA?.p.secPos === 'SF', `杰伦·威廉姆斯 = SG/SF（${jwA?.p.pos}/${jwA?.p.secPos}）`);
   // 旧档改名迁移：英文名 → 中文
   const clone = JSON.parse(JSON.stringify(l)) as LeagueState;
   const en1 = clone.teams[0].players.find((p) => p.name === '杰森·塔图姆') ?? clone.teams[0].players[0];

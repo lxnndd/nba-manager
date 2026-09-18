@@ -25,6 +25,8 @@ export function LeagueView({ api }: { api: GameApi }) {
   const me = l.teams[l.userTeamId];
   const [tab, setTab] = useState<'standings' | 'leaders' | 'trophy'>('standings');
   const [stat, setStat] = useState<LeaderStat>('pts');
+  // v2.5.0：数据榜的"常规赛 / 季后赛"切换
+  const [statSeason, setStatSeason] = useState<'reg' | 'po'>('reg');
   const [detailTeam, setDetailTeam] = useState<number | null>(null);
   const [view, setView] = useState<{ p: Player; t: Team } | null>(null);
 
@@ -69,13 +71,15 @@ export function LeagueView({ api }: { api: GameApi }) {
     </div>
   );
 
-  const ls = leaders(l, stat);
+  // v2.5.0：数据榜分"常规赛 / 季后赛"，季后赛榜用独立统计（poGp/poStats）
+  const poMode = statSeason === 'po';
+  const ls = leaders(l, stat, poMode ? 1 : 8, poMode);
   const leadersTable = (title: string) => (
     <table className="tbl leaders-tbl">
       <thead>
         <tr>
           <th className="rank">#</th><th>球员</th><th>球队</th><th>位置</th>
-          <th className="num">场次</th><th className="num">{title}</th>
+          <th className="num">{poMode ? '季后赛出场' : '场次'}</th><th className="num">{title}</th>
         </tr>
       </thead>
       <tbody>
@@ -90,7 +94,7 @@ export function LeagueView({ api }: { api: GameApi }) {
             </td>
             <td><span className="team-cell"><TeamLogo abbr={findAbbr(l, r.player)} size="xs" />{findAbbr(l, r.player)}</span></td>
             <td>{POS_CN[r.player.pos]}</td>
-            <td className="num">{r.player.gp}</td>
+            <td className="num">{poMode ? (r.player.poGp ?? 0) : r.player.gp}</td>
             <td className="num hot">{r.value.toFixed(1)}</td>
           </tr>
         ))}
@@ -117,6 +121,18 @@ export function LeagueView({ api }: { api: GameApi }) {
 
       {tab === 'leaders' && (
         <div className="leaders-wrap">
+          {/* v2.5.0：常规赛 / 季后赛数据分开（季后赛为独立统计） */}
+          <div className="tabs small">
+            <button className={`tab ${statSeason === 'reg' ? 'on' : ''}`} onClick={() => setStatSeason('reg')}>
+              常规赛数据
+            </button>
+            <button className={`tab ${statSeason === 'po' ? 'on' : ''}`} onClick={() => setStatSeason('po')}>
+              季后赛数据
+            </button>
+            <span className="dim" style={{ marginLeft: 8, fontSize: 11.5 }}>
+              {poMode ? '（季后赛独立统计，与常规赛数据分开）' : '（数据实时更新）'}
+            </span>
+          </div>
           <div className="tabs small">
             {LEADER_TABS.map((t) => (
               <button key={t.key} className={`tab ${stat === t.key ? 'on' : ''}`} onClick={() => setStat(t.key)}>

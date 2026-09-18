@@ -151,6 +151,11 @@ async function main() {
   await sleep(400);
   const modal = await ev(`!!document.querySelector('.modal-mask')`);
   log(`6. 点已赛行弹战报: ${modal ? 'OK' : '无'}`);
+  // v2.5.0：战报末尾"总计"行（全队合计）
+  const totalRow = await ev(`(()=>{const r=document.querySelector('.box-total-row');return r?r.textContent.replace(/\\s+/g,' ').trim().slice(0,90):'无'})()`);
+  const boxRows = await ev(`document.querySelectorAll('.box-tbl tbody tr').length`);
+  log(`   战报总计行: ${String(totalRow).startsWith('无') ? '缺失' : 'OK — ' + totalRow}`);
+  log(`   战报明细行=${boxRows}`);
   await shot('ui-smoke-5-modal');
   await closeModal();
 
@@ -164,18 +169,56 @@ async function main() {
   log(`   阵容tab=${r} 轮换面板=${hasRot ? 'OK' : '无'} 气质徽章=${metaChip} 羁绊徽章=${bondChip}`);
   await shot('ui-smoke-6-roster');
 
+  // 7.5) v2.5.0 自由市场：五个位置筛选按钮
+  log('7.5 自由市场位置筛选（全部 + PG/SG/SF/PF/C）...');
+  r = await ev(`(()=>{const b=[...document.querySelectorAll('.tb-nav button')].find(x=>x.textContent.includes('自由市场'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await sleep(600);
+  const faBtns = await ev(`[...document.querySelectorAll('.fa-filter button')].map(b=>b.textContent.trim()).join(' | ')`);
+  const faBtnN = await ev(`document.querySelectorAll('.fa-filter button').length`);
+  const faAll = await ev(`document.querySelectorAll('.fa-table .fa-row').length`);
+  log(`   自由市场tab=${r} 筛选按钮=${faBtnN}（应 6）：${faBtns}`);
+  log(`   未筛选行数=${faAll}`);
+  const faCenter = await ev(`(()=>{const b=[...document.querySelectorAll('.fa-filter button')].find(x=>x.textContent.includes('中锋'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await sleep(500);
+  const faCenterN = await ev(`document.querySelectorAll('.fa-table .fa-row').length`);
+  const faPosOk = await ev(`[...document.querySelectorAll('.fa-table .fa-row .fa-pos')].every(e=>e.textContent.includes('中锋'))`);
+  log(`   点「中锋」=${faCenter} 行数=${faCenterN}（应 ≤ ${faAll}）全部含中锋 = ${faPosOk}`);
+  await shot('ui-smoke-6_5-fa-filter');
+  const faReset = await ev(`(()=>{const b=[...document.querySelectorAll('.fa-filter button')].find(x=>x.textContent.includes('全部'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await sleep(300);
+  const faBackN = await ev(`document.querySelectorAll('.fa-table .fa-row').length`);
+  log(`   点「全部」=${faReset} 行数回到 ${faBackN}`);
+
   // 8) 交易截止日：切到交易页 → 应为开放状态（常规赛早期）；v1.4 头像+详情
   log('8. 交易页（常规赛早期应开放；v1.4 头像+球员详情）...');
   r = await ev(`(()=>{const b=[...document.querySelectorAll('button, .nav-btn')].find(x=>x.textContent.includes('交易'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
   await sleep(500);
   const tradeOpen = await ev(`document.body.innerText.includes('交易窗口已关闭')`);
   const facesN = await ev(`document.querySelectorAll('.pick-list .pick-row .player-face, .pick-list .pick-row .face-ph').length`);
-  const ovrBadgeN = await ev(`document.querySelectorAll('.pick-list .pick-row .rc-ovr').length`);
+  const ovrBadgeN = await ev(`document.querySelectorAll('.trade-col .pick-row .pl-ovr .ovr-badge').length`);
   log(`   交易页tab=${r} 截止日误关闭=${tradeOpen} 头像行=${facesN} 能力值徽章=${ovrBadgeN}`);
+  // v2.5.0：三状态徽章 / 位置列 / 去掉双方总估值 / 锁定按钮
+  const phaseChips = await ev(`[...document.querySelectorAll('.chip[class*=phase-]')].map(e=>e.textContent.trim()).join(' | ')`);
+  const posCells = await ev(`document.querySelectorAll('.trade-col .pick-row .pl-pos, .pick-list .pick-row .pl-pos').length`);
+  const hasTotalVal = await ev(`document.body.innerText.includes('总估值')`);
+  const lockBtns = await ev(`document.querySelectorAll('.lock-btn').length`);
+  log(`   球队状态徽章：${phaseChips || '无'}（应含争冠/补强/重建之一）`);
+  log(`   球员行位置列=${posCells}（应 >0）· 页面出现"总估值"=${hasTotalVal}（v2.5.0 应为 false）`);
+  log(`   锁定按钮=${lockBtns}（应 >0）`);
+  const lockFirst = await ev(`(()=>{const b=document.querySelector('.trade-col .lock-btn');if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await sleep(300);
+  const lockedRows = await ev(`document.querySelectorAll('.pick-list .pick-row.locked').length`);
+  const lockOn = await ev(`document.querySelectorAll('.lock-btn.on').length`);
+  log(`   点锁=${lockFirst} 锁定行=${lockedRows} 锁定态按钮=${lockOn}（应 ≥1）`);
+  await shot('ui-smoke-7-trade-lock');
+  const unlockFirst = await ev(`(()=>{const b=document.querySelector('.trade-col .lock-btn.on');if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await sleep(300);
+  const lockedRows2 = await ev(`document.querySelectorAll('.pick-list .pick-row.locked').length`);
+  log(`   再点解锁=${unlockFirst} 剩余锁定行=${lockedRows2}（应 0）`);
   await shot('ui-smoke-7-trade');
-  // v2.3：选秀权（每队未来 3 年 × 首轮/次轮 = 6 枚，带年份标识）
-  const myPickRows = await ev(`document.querySelectorAll('.pick-list.picks .pick-row').length`);
-  const pickLabels = await ev(`[...document.querySelectorAll('.pick-list.picks .pick-row .pl-name')].map(e=>e.textContent).join(' | ')`);
+  // v2.3：选秀权（每队未来 3 年 × 首轮/次轮 = 6 枚，带年份标识）；v2.5.0 交易页有两列 → 只数我方那列
+  const myPickRows = await ev(`document.querySelectorAll('.trade-col:first-child .pick-list.picks .pick-row').length`);
+  const pickLabels = await ev(`[...document.querySelectorAll('.trade-col:first-child .pick-list.picks .pick-row .pl-name')].map(e=>e.textContent).join(' | ')`);
   log(`   我的选秀权 ${myPickRows} 枚（应 6）：${pickLabels}`);
   // v1.4：点击球员名字 → 打开完整详情（18 项技能 4 组）
   const clickName = await ev(`(()=>{const n=document.querySelector('.pick-list .pick-row .pl-name');if(n){n.click();return 'clicked'}return 'none'})()`);
@@ -196,6 +239,25 @@ async function main() {
   log(`   自动预检：选我方=${selMe} 选对方=${selAi} verdict="${verdict.slice(0, 60)}" 确认按钮=${confirmBtn}`);
   await shot('ui-smoke-7-trade-precheck');
   await ev(`(()=>{const r=document.querySelectorAll('.trade-col .pick-row')[10];if(r)r.click();const r2=document.querySelectorAll('.trade-col:nth-child(2) .pick-row')[8];if(r2)r2.click();return 'cleared'})()`);
+
+  // 8.2) v2.5.0 交易搜索器：结果里每个球员都带位置与能力值（含我方筹码）
+  log('8.2 交易搜索器（结果显示位置 + 能力值）...');
+  const srPick = await ev(`(()=>{const r=document.querySelectorAll('.trade-col .pick-row')[5];if(r){r.click();return 'clicked'}return 'none'})()`);
+  const srBtn = await clickBtn('搜索可行交易');
+  const srOk = await waitFor(`document.querySelectorAll('.search-row').length > 0`, 25000, 400);
+  const srN = await ev(`document.querySelectorAll('.search-row').length`);
+  const srOut = await ev(`document.querySelector('.search-row .sr-out')?.textContent?.trim() ?? ''`);
+  const srIn = await ev(`document.querySelector('.search-row .sr-in')?.textContent?.trim() ?? ''`);
+  const srHasOvr = /OVR/.test(srOut + ' ' + srIn) && /\//.test(srOut + ' ' + srIn);
+  log(`   选筹码=${srPick} 搜索=${srBtn} 出结果=${srOk} 结果行=${srN} 含位置+OVR=${srHasOvr}`);
+  log(`   送出 "${srOut.slice(0, 80)}"`);
+  log(`   得到 "${srIn.slice(0, 80)}"`);
+  const srPhase = await ev(`document.querySelector('.search-row .sr-phase')?.textContent?.trim() ?? '无'`);
+  log(`   结果中的球队状态标签：${srPhase}`);
+  await shot('ui-smoke-7-trade-search');
+  const srClear = await ev(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('清空结果'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await ev(`(()=>{const r=document.querySelectorAll('.trade-col .pick-row')[5];if(r)r.click();return 'ok'})()`);
+  log(`   清空搜索结果=${srClear}`);
 
   // 8.5) v2.3.0 新秀榜（常规赛期间即可查看下一届 80 人名单 + 身高/体重/臂展/年龄）
   log('8.5 新秀榜（下一届新秀名单 + 体测数据）...');
@@ -255,6 +317,37 @@ async function main() {
   await shot('ui-smoke-8-poff');
   await closeModal();
 
+  // 9.5) v2.5.0 数据榜：常规赛 / 季后赛分开（季后赛期间应为独立统计）
+  log('9.5 联盟页数据榜：常规赛 / 季后赛切换...');
+  r = await ev(`(()=>{const b=[...document.querySelectorAll('.tb-nav button')].find(x=>x.textContent.includes('联盟'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await sleep(600);
+  const leagueTab = await ev(`(()=>{const b=[...document.querySelectorAll('.tabs button')].find(x=>x.textContent.includes('球员数据榜'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await sleep(500);
+  const regHead = await ev(`document.querySelector('.leaders-tbl thead')?.textContent?.replace(/\\s+/g,' ') ?? ''`);
+  const regRows = await ev(`document.querySelectorAll('.leaders-tbl tbody tr').length`);
+  const poSwitch = await ev(`(()=>{const b=[...document.querySelectorAll('.tabs button')].find(x=>x.textContent.includes('季后赛数据'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await sleep(500);
+  const poHead = await ev(`document.querySelector('.leaders-tbl thead')?.textContent?.replace(/\\s+/g,' ') ?? ''`);
+  const poRows = await ev(`document.querySelectorAll('.leaders-tbl tbody tr').length`);
+  const poNote = await ev(`document.body.innerText.includes('季后赛独立统计')`);
+  log(`   联盟tab=${r} 数据榜tab=${leagueTab} 常规赛表头="${regHead.trim()}"（${regRows} 行）`);
+  log(`   季后赛切换=${poSwitch} 季后赛表头="${poHead.trim()}"（${poRows} 行）独立统计说明=${poNote}`);
+  await shot('ui-smoke-8_5-leaders-po');
+  await ev(`(()=>{const b=[...document.querySelectorAll('.tabs button')].find(x=>x.textContent.includes('常规赛数据'));if(b)b.click();return 'ok'})()`);
+  await ev(`(()=>{const b=[...document.querySelectorAll('.tb-nav button')].find(x=>x.textContent.includes('赛程'));if(b)b.click();return 'ok'})()`);
+  await sleep(400);
+
+  // 9.6) v2.5.0 阵容页：常规赛打完 → 切换记录季后赛数据
+  log('9.6 阵容页季后赛数据（季后赛期间显示季后赛场均）...');
+  r = await ev(`(()=>{const b=[...document.querySelectorAll('.tb-nav button')].find(x=>x.textContent.includes('阵容'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await sleep(700);
+  const poCells = await ev(`document.querySelectorAll('.rc-mid.po').length`);
+  const poSample = await ev(`[...document.querySelectorAll('.rc-mid.po')].map(e=>e.textContent.trim()).slice(0,3).join(' | ')`);
+  log(`   阵容tab=${r} 季后赛数据行=${poCells} 示例："${poSample}"`);
+  await shot('ui-smoke-8_6-roster-po');
+  await ev(`(()=>{const b=[...document.querySelectorAll('.tb-nav button')].find(x=>x.textContent.includes('赛程'));if(b)b.click();return 'ok'})()`);
+  await sleep(400);
+
   // 10) v1.2 快进到总决赛 + 总冠军界面（冠军球队 + 冠军阵容 + FMVP 卡）
   log('10. 点「⏩ 快进到总决赛」→ 总冠军界面（v2.0 含 FMVP 卡）...');
   await ev(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('赛程'));if(b)b.click();return 'ok'})()`);
@@ -284,6 +377,9 @@ async function main() {
   const defRows = await ev(`document.querySelectorAll('.award-line.defense').length`);
   const modalW = await ev(`(()=>{const m=document.querySelector('.awards-modal');return m?Math.round(m.getBoundingClientRect().width):0})()`);
   log(`   颁奖典礼弹窗：按钮=${rAwards} 弹窗=${awardsModal} 大奖卡=${bigCards}（v2.0 应 4）防守阵容行=${defRows}（应 2）弹窗宽=${modalW}px`);
+  // v2.5.0：最佳新秀阵容一阵/二阵各 5 人（此前二阵常缺人）
+  const rkRowN = await ev(`[...document.querySelectorAll('.awards-modal .award-line')].filter(e=>e.textContent.includes('新秀')).map(e=>e.querySelectorAll('.award-p').length).join(' / ')`);
+  log(`   新秀阵容人数（一阵 / 二阵 应 5 / 5）：${rkRowN}`);
   await shot('ui-smoke-10-awards');
   await closeModal();
 
@@ -301,16 +397,46 @@ async function main() {
   const draftTitle = await ev(`[...document.querySelectorAll('.draft-panel .sec-title')].map(e=>e.textContent).find(t=>t.includes('选秀大会')) ?? ''`);
   const lotteryTitle = await ev(`[...document.querySelectorAll('.draft-panel .sec-title')].map(e=>e.textContent).find(t=>t.includes('乐透抽签')) ?? ''`);
   const lotteryRows = await ev(`document.querySelectorAll('.lottery-row').length`);
+  // v2.5.0：每行的"原属球队 · 现属球队"
+  const loOwnerN = await ev(`document.querySelectorAll('.lottery-row .lo-owner').length`);
+  const loOwnerTxt = await ev(`document.querySelector('.lottery-row .lo-owner')?.textContent?.trim() ?? ''`);
+  const loMovedN = await ev(`document.querySelectorAll('.lottery-row .lo-owner.moved').length`);
   const isSixty = /60 签/.test(draftTitle) && /30 首轮 \+ 30 次轮/.test(draftTitle);
   log(`   选秀签结构: ${isSixty ? 'OK' : '异常'} — "${draftTitle.trim()}"`);
   log(`   乐透抽签展示: ${lotteryRows === 14 ? 'OK' : '异常'} — "${lotteryTitle.trim()}"（${lotteryRows} 行，应 14）`);
+  log(`   乐透签归属标签 ${loOwnerN} 行（应 14）· 已易主 ${loMovedN} 行 · 示例 "${loOwnerTxt}"`);
   await shot('ui-smoke-11-draft');
+
+  // 11.5) v2.5.0 休赛期交易窗口（乐透抽签后 3 天）
+  log('11.5 休赛期交易窗口（抽签后 3 天，可在休赛期做交易）...');
+  const offWinTxt = await ev(`(()=>{const m=document.body.innerText.match(/休赛期交易窗口（乐透抽签后 (\\d+) 天/);return m?Number(m[1]):null})()`);
+  log(`   窗口剩余天数=${offWinTxt}（应 3）`);
+  const openTrade = await clickBtn('展开交易面板');
+  await sleep(800);
+  const offTradeCols = await ev(`document.querySelectorAll('.trade-grid .trade-col').length`);
+  const offLocks = await ev(`document.querySelectorAll('.trade-grid .lock-btn').length`);
+  const offClosed = await ev(`document.body.innerText.includes('交易窗口已关闭')`);
+  log(`   展开=${openTrade} 交易栏=${offTradeCols}（应 2）锁定按钮=${offLocks} 误显已关闭=${offClosed}`);
+  await shot('ui-smoke-11_5-offseason-trade');
+  const offLockClick = await ev(`(()=>{const b=document.querySelector('.trade-grid .lock-btn');if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await sleep(300);
+  const offLockedRows = await ev(`document.querySelectorAll('.trade-grid .pick-row.locked').length`);
+  log(`   休赛期锁定=${offLockClick} 锁定行=${offLockedRows}（应 1）`);
+  log(`   收起=${await clickBtn('收起交易面板')}`);
+  const endDay = await ev(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('结束一天'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  await sleep(500);
+  const offWinTxt2 = await ev(`(()=>{const m=document.body.innerText.match(/休赛期交易窗口（乐透抽签后 (\\d+) 天/);return m?Number(m[1]):null})()`);
+  log(`   结束一天=${endDay} 剩余天数=${offWinTxt2}（应 2）`);
   const rAll = await clickBtn('自动完成全部选秀');
   log(`   自动完成全部选秀=${rAll}`);
   const draftGone = await waitFor(`!document.querySelector('.draft-panel')`, 45000, 500);
   log(`   选秀完成（面板消失）: ${draftGone ? 'OK' : '超时'}`);
   const draftSummary = await ev(`document.body.innerText.includes('本届选秀共 80 人')`);
   log(`   选秀汇总报告: ${draftSummary ? 'OK' : '无'}`);
+  // v2.5.0：合同到期播报（伤病康复 + 合同年递减的可见结果）
+  const expireNews = await ev(`(()=>{const m=document.body.innerText.match(/合同到期未续约/g);return m?m.length:0})()`);
+  const faPool = await ev(`(()=>{const m=document.body.innerText.match(/自由市场\\s*(\\d+)\\s*人/);return m?Number(m[1]):null})()`);
+  log(`   合同到期播报 ${expireNews} 条（v2.5.0 应有）· 自由市场 ${faPool} 人`);
   const enterOk = await waitFor(`!![...document.querySelectorAll('button')].find(x=>x.textContent.includes('进入自由市场')&&!x.disabled)`, 10000, 300);
   log(`   进入自由市场按钮可用: ${enterOk ? 'OK' : '超时'}`);
 

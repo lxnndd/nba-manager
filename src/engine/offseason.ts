@@ -220,6 +220,13 @@ export function beginOffseason(l: LeagueState): void {
       if (retireOf(p)) retiring.push({ teamId: team.id, p });
     }
   }
+  // v2.5.0：赛季结束伤病全部康复（用户要求："前一赛季受伤，下一赛季直接康复，不会延续状态"）；
+  //   同时合同年数逐年递减（此前完全没有递减逻辑 → "合同年份随赛季好像没变化"）
+  const offSeasonBookkeeping = (p: Player) => {
+    p.injury = null;
+    if (p.contractYears > 0) p.contractYears--;
+  };
+  for (const team of l.teams) for (const p of team.players) offSeasonBookkeeping(p);
   for (const r of retiring) {
     const team = l.teams[r.teamId];
     const i = team.players.indexOf(r.p);
@@ -233,6 +240,7 @@ export function beginOffseason(l: LeagueState): void {
   for (const p of l.freeAgents) {
     p.points += growthPointsFor(p);
     ageOne(p);
+    offSeasonBookkeeping(p); // v2.5.0：伤病康复 + 合同年递减
     if (retireOf(p)) {
       const c = p.career;
       addNews(l, `👋 自由球员 ${p.name} 宣布退役（生涯 ${c.gp} 场 · ${Math.round(c.pts)} 分 · ${Math.round(c.reb)} 板 · ${Math.round(c.ast)} 助）。`);
@@ -242,6 +250,40 @@ export function beginOffseason(l: LeagueState): void {
     faLeft.push(p);
   }
   l.freeAgents = faLeft;
+
+  // ---------- v2.5.0：合同到期处理（用户要求"合同年份随赛季变化"）----------
+  //   合同年递减到 0 = 到期：按安全阀放走最弱的几名（进入自由市场），其余自动续约。
+  //   安全阀（避免名单被打空）：每队 ≥13 人、每个位置 ≥1 人、每队最多放走 3 人。
+  const released: Player[] = [];
+  for (const team of l.teams) {
+    const due = team.players.filter((p) => p.contractYears <= 0);
+    if (!due.length) continue;
+    const keep = new Set<number>();
+    for (const pos of POS_ORDER) {
+      const list = team.players.filter((p) => p.pos === pos);
+      if (list.length === 1) keep.add(list[0].id);
+    }
+    const allowed = Math.max(0, Math.min(3, team.players.length - 13));
+    const relIds = new Set(
+      due.filter((p) => !keep.has(p.id)).sort((a, b) => a.ovr - b.ovr).slice(0, allowed).map((p) => p.id),
+    );
+    for (const p of due) {
+      if (relIds.has(p.id)) {
+        p.salary = 0;
+        released.push(p);
+        addNews(l, `📄 ${p.name}（${team.name} · ${p.pos} · OVR ${p.ovr}）合同到期未续约，进入自由市场。`);
+      } else {
+        // 自动续约：老将 1 年、29-31 岁 2 年、其余 3 年，年薪按市场价重签
+        p.contractYears = p.age >= 32 ? 1 : p.age >= 29 ? 2 : 3;
+        p.salary = salaryFor(p.ovr);
+      }
+    }
+    if (relIds.size) team.players = team.players.filter((p) => !relIds.has(p.id));
+  }
+  if (released.length) {
+    l.freeAgents = [...l.freeAgents, ...released];
+    addNews(l, `📄 本休赛期共 ${released.length} 名球员合同到期进入自由市场。`);
+  }
 
   // v2.1 选秀大会（可操作版）：生成 80 人池 + 签序，进入 DraftState；
   // 处理进度由休赛期 UI / AI 代选推进（draftPickAuto / draftPickUser / draftComplete）。
@@ -258,7 +300,7 @@ export function beginOffseason(l: LeagueState): void {
     return i < 0 ? 99 : i;
   };
   // v2.4.0：保存抽签结果供休赛期界面可视化展示（概率 + 顺位 + 前 4 高亮）
-  l.lottery = { year: draftYear, order: draw.order, odds: draw.odds, top4: draw.order.slice(0, 4) };
+  l.lottery = { year: draftYear, order: draw.order, odds: draw.odds, top4: draw.order.slice(0, 4), lotteryIds: draw.lotteryIds };
   const order = l.draftPool
     .filter((pk) => pk.year === draftYear)
     .sort((x, y) => {
@@ -307,6 +349,8 @@ export function beginOffseason(l: LeagueState): void {
   l.offseason = true;
   l.offseasonStep = 1;
   l.midUsed = l.teams.map(() => false); // 中产特例每休赛期一次
+  // v2.5.0：休赛期交易窗口（乐透抽签后 3 天）——step1 期间可交易，进入自由市场前关闭
+  l.offseasonTradeDays = 3;
   // v2.0 自由市场 7 天窗口重置 + 季后赛淘汰弹窗标记 + 待处理事件清理
   l.faDay = 1;
   l.faOffers = [];
@@ -858,6 +902,7 @@ export function finishOffseason(l: LeagueState): void {
   }
   l.offseason = false;
   l.offseasonStep = 0;
+  l.offseasonTradeDays = 0; // v2.5.0：新赛季开始，休赛期交易窗口关闭
   // v2.3 选秀权滚动窗口：新赛季（year 已 +1）保留未来 3 年内的签（含已交易的持有者），
   // 丢弃刚用完的那一届并补足最远年份（每队 1 首轮 + 1 次轮）
   rollPickPool(l);

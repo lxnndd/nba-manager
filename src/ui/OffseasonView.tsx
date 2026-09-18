@@ -15,6 +15,7 @@ import { money, ovrClass, POS_CN } from './format';
 import { PlayerFace } from './PlayerFace';
 import { TeamLogo } from './TeamLogo';
 import { TradeOffersPanel } from './TradeOffersPanel';
+import { TradeView } from './TradeView';
 import type { GameApi } from './useGame';
 
 export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: () => void }) {
@@ -40,6 +41,8 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
   // 选秀操作（v2.1：玩家持有的签可手动挑选；v2.4.0：快进到我的签 + 选中前确认）
   const [pendingRookie, setPendingRookie] = useState<Player | null>(null);
   const [draftMsg, setDraftMsg] = useState<string | null>(null);
+  // v2.5.0：休赛期交易窗口面板（乐透抽签后 3 天）
+  const [showOffseasonTrade, setShowOffseasonTrade] = useState(false);
   const draftAutoOne = () => {
     draftPickAuto(l);
     api.tick();
@@ -195,12 +198,22 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
                       const odd = l.lottery!.odds[i] ?? 0;
                       const isTop4 = i < 4;
                       const isMine = tid === l.userTeamId;
+                      // v2.5.0：显示该签的"原属球队 → 现在归属"（签可能已被交易）
+                      const pk = l.draftPool.find((x) => x.year === l.lottery!.year && x.round === 1 && x.f === tid);
+                      const owner = pk ? l.teams[pk.o] : null;
+                      const moved = !!owner && owner.id !== tid;
                       return (
                         <div className={`lottery-row ${isTop4 ? 'top4' : ''} ${isMine ? 'mine' : ''}`} key={tid}
-                          title={`${t.city} ${t.name}：抽签前状元概率 ${(odd * 100).toFixed(1)}%，最终第 ${i + 1} 顺位`}>
+                          title={`${t.city} ${t.name}：抽签前状元概率 ${(odd * 100).toFixed(1)}%，最终第 ${i + 1} 顺位${moved ? `；该签原属 ${t.abbr}，现由 ${owner!.abbr} 持有` : ''}`}>
                           <span className="lo-pick">{i + 1}</span>
                           <TeamLogo abbr={t.abbr} size="xs" />
-                          <span className="lo-team">{t.abbr}{isMine ? ' ★' : ''}</span>
+                          <span className="lo-team">
+                            {t.abbr}{isMine ? ' ★' : ''}
+                          </span>
+                          {/* v2.5.0：明确展示"原属球队 · 现属球队"（签位可能已被交易） */}
+                          <span className={`lo-owner ${moved ? 'moved' : ''}`}>
+                            {moved ? `原属 ${t.abbr} → 现属 ${owner!.abbr}` : `原属 ${t.abbr} · 现属 ${t.abbr}`}
+                          </span>
                           <span className="lo-odds">
                             <span className="lo-bar" style={{ width: `${Math.min(100, (odd / 0.14) * 100)}%` }} />
                             <span className="lo-odd-text">{(odd * 100).toFixed(1)}%</span>
@@ -278,6 +291,29 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
                 </div>
               )}
               {draftMsg && <div className="verdict ok" style={{ marginTop: 6 }}>{draftMsg}</div>}
+            </div>
+          )}
+          {/* v2.5.0：休赛期交易窗口（乐透抽签后 3 天）——此前休赛期完全无法交易 */}
+          {l.offseasonTradeDays > 0 && (
+            <div className="action-card">
+              <div className="action-title">
+                🔁 休赛期交易窗口（乐透抽签后 {l.offseasonTradeDays} 天 · 进入自由市场前关闭）
+              </div>
+              <div className="mini-lines" style={{ marginBottom: 8 }}>
+                趁选秀权落位、自由市场还没开启，和各队谈交易吧：球队定位（重建/补强/争冠）决定对方
+                看重选秀权还是即战力。
+              </div>
+              <div className="btn-row" style={{ marginBottom: 8 }}>
+                <button className="btn" onClick={() => setShowOffseasonTrade((v) => !v)}>
+                  {showOffseasonTrade ? '收起交易面板' : '展开交易面板'}
+                </button>
+                {l.offseasonTradeDays > 0 && (
+                  <button className="btn sm" onClick={() => { l.offseasonTradeDays = Math.max(0, l.offseasonTradeDays - 1); api.tick(); }}>
+                    结束一天（剩 {Math.max(0, l.offseasonTradeDays - 1)} 天）
+                  </button>
+                )}
+              </div>
+              {showOffseasonTrade && <TradeView api={api} />}
             </div>
           )}
           <div className="btn-row">

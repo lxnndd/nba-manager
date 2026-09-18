@@ -80,6 +80,37 @@ export function BoxScoreModal({ l, game, title, onClose }: {
                 </tr>
               ))}
             </tbody>
+            {/* v2.5.0：末行加"总计"（全队合计） */}
+            <tfoot>
+              {(() => {
+                const sum = (f: (b: typeof rows[number]['b']) => number) => rows.reduce((s, r) => s + f(r.b), 0);
+                const s = {
+                  min: sum((b) => b.min), pts: sum((b) => b.pts), reb: sum((b) => b.reb), ast: sum((b) => b.ast),
+                  stl: sum((b) => b.stl), blk: sum((b) => b.blk), tov: sum((b) => b.tov), pf: sum((b) => b.pf),
+                  fgm: sum((b) => b.fgm), fga: sum((b) => b.fga),
+                  tpm: sum((b) => b.tpm), tpa: sum((b) => b.tpa),
+                  ftm: sum((b) => b.ftm), fta: sum((b) => b.fta),
+                };
+                return (
+                  <tr className="box-total-row">
+                    <td className="pl">总计</td>
+                    <td>—</td>
+                    <td>{s.min}</td>
+                    <td className="num">{s.pts}</td>
+                    <td className="num">{s.reb}</td>
+                    <td className="num">{s.ast}</td>
+                    <td className="num">{s.stl}</td>
+                    <td className="num">{s.blk}</td>
+                    <td className="num">{s.tov}</td>
+                    <td className="num">{s.pf}</td>
+                    <td className="num">{s.fgm}-{s.fga}</td>
+                    <td className="num">{s.tpm}-{s.tpa}</td>
+                    <td className="num">{s.ftm}-{s.fta}</td>
+                    <td className="num">—</td>
+                  </tr>
+                );
+              })()}
+            </tfoot>
           </table>
         </div>
       </div>

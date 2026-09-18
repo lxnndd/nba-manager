@@ -6,9 +6,10 @@ import type { DraftPick, LeagueState, Player, Team } from '../engine/types';
 import {
   evaluateTrade, applyTrade, tradeValue, pickValue, pickLabel, teamStrength,
   payrollOf, SALARY_CAP, TAX_LINE, HARD_CAP, TRADE_DEADLINE_DAY, searchTrades,
+  teamPhase, phaseLabel,
   type TradeSuggestion,
 } from '../engine/league';
-import { POS_CN, money, perGameLine } from './format';
+import { POS_CN, money, perGameLine, ovrClass } from './format';
 import { TeamLogo } from './TeamLogo';
 import { PlayerFace } from './PlayerFace';
 import { PlayerModal } from './PlayerModal';
@@ -138,7 +139,9 @@ export function TradeView({ api }: { api: GameApi }) {
 
   if (!target) return null;
 
-  if (l.day >= TRADE_DEADLINE_DAY) {
+  // v2.5.0：休赛期交易窗口（乐透抽签后 3 天，offseasonStep=1 期间）也开放交易
+  const offseasonWindow = l.offseason && l.offseasonStep <= 1 && (l.offseasonTradeDays ?? 0) > 0;
+  if (!offseasonWindow && l.day >= TRADE_DEADLINE_DAY) {
     return (
       <div className="view">
         <div className="status-strip">
@@ -156,22 +159,52 @@ export function TradeView({ api }: { api: GameApi }) {
   }
 
   const pay = payrollOf(me.players);
+  // v2.5.0：对方球队阶段（争冠 >85 / 补强 80-85 / 重建 <80，按队内最强 5 人平均 OVR）
+  const targetPhase = teamPhase(target);
+  const myPhase = teamPhase(me);
+  const phaseHint = targetPhase === 'contender'
+    ? '争冠队：看重即时战力，愿意付出选秀权与年轻球员换即战力（未来资产打 7 折、老将溢价 1.2 倍）'
+    : targetPhase === 'retool'
+      ? '补强队：较为看重即时战力（选秀权 9 折、老将 1.05 倍）'
+      : '重建队：非常重视未来资产——选秀权与年轻球员溢价 1.35 倍、老将打 8 折';
   const payState =
     pay > HARD_CAP ? '⚠️ 超过 2 亿硬顶（规则上不可能）'
       : pay > TAX_LINE ? `超奢侈税线 ${money(pay - TAX_LINE)} · apron 限制生效`
         : pay > SALARY_CAP ? `帽上 ${money(pay - SALARY_CAP)}`
           : `帽下空间 ${money(SALARY_CAP - pay)}`;
 
-  const row = (p: Player, sel: boolean, onPick: () => void, team: Team) => (
-    <div className={`pick-row ${sel ? 'sel' : ''}`} key={p.id} onClick={onPick} title={`OVR ${p.ovr} · ${p.age}岁 · 潜力 ${p.potential} · ${p.contractYears > 0 ? `剩${p.contractYears}年合同` : '无合同'}`}>
-      <span className="pl-face" title={`OVR ${p.ovr}`}><PlayerFace p={p} size="sm" /></span>
-      <span className="pl-name" title="点击查看球员详情" onClick={(e) => { e.stopPropagation(); setView({ p, t: team }); }}>{p.name}</span>
-      <span className="pl-pos">{POS_CN[p.pos]}{p.secPos && p.secPos !== p.pos ? `/${POS_CN[p.secPos]}` : ''}</span>
-      <span className="pl-stats">{perGameLine(p)}</span>
-      <span className="pl-salary">{money(p.salary)}</span>
-      <span className="pl-val" title="交易价值（75 能力=1.0，每 +10 翻倍；含潜力成长/年龄折损±合同性价比）">估值 {tradeValue(p).toFixed(1)}</span>
-    </div>
-  );
+  // v2.5.0：锁定球员（锁定的不会被 AI 报价 / 搜索器不会把他算作可动筹码）
+  const locked = new Set(l.lockedPids ?? []);
+  const toggleLock = (pid: number) => {
+    const cur = l.lockedPids ?? [];
+    l.lockedPids = cur.includes(pid) ? cur.filter((x) => x !== pid) : [...cur, pid];
+    api.tick();
+  };
+
+  const row = (p: Player, sel: boolean, onPick: () => void, team: Team) => {
+    const isMine = team.id === me.id;
+    const isLocked = locked.has(p.id);
+    return (
+      <div className={`pick-row ${sel ? 'sel' : ''} ${isLocked ? 'locked' : ''}`} key={p.id}
+        onClick={onPick}
+        title={`OVR ${p.ovr} · ${p.pos}/${p.secPos} · ${p.age}岁 · 潜力 ${p.potential} · ${p.contractYears > 0 ? `剩${p.contractYears}年合同` : '无合同'}${isLocked ? '（已锁定：不会被 AI 报价）' : ''}`}>
+        <span className="pl-face" title={`OVR ${p.ovr}`}><PlayerFace p={p} size="sm" /></span>
+        <span className="pl-name" title="点击查看球员详情" onClick={(e) => { e.stopPropagation(); setView({ p, t: team }); }}>{p.name}</span>
+        <span className="pl-ovr"><span className={`ovr-badge sm ${ovrClass(p.ovr)}`}>{p.ovr}</span></span>
+        <span className="pl-pos">{POS_CN[p.pos]}{p.secPos && p.secPos !== p.pos ? `/${POS_CN[p.secPos]}` : ''}</span>
+        <span className="pl-stats">{perGameLine(p)}</span>
+        <span className="pl-salary">{money(p.salary)}</span>
+        <span className="pl-val" title="交易价值（75 能力=1.0，每 +10 翻倍；含潜力成长/年龄折损±合同性价比）">估值 {tradeValue(p).toFixed(1)}</span>
+        {isMine && (
+          <button
+            className={`lock-btn ${isLocked ? 'on' : ''}`}
+            title={isLocked ? '已锁定：AI 不会向你报价这名球员（点击解锁）' : '锁定：禁止 AI 为这名球员向你报价'}
+            onClick={(e) => { e.stopPropagation(); toggleLock(p.id); }}
+          >{isLocked ? '🔒' : '🔓'}</button>
+        )}
+      </div>
+    );
+  };
 
   const pickRow = (idx: number, sel: boolean, onPick: () => void) => {
     const pk = l.draftPool[idx];
@@ -203,6 +236,16 @@ export function TradeView({ api }: { api: GameApi }) {
           对方工资单 {money(payrollOf(target.players))}
         </div>
         <div className="chip">{target.abbr} 战绩 {target.win}-{target.loss}</div>
+        {/* v2.5.0：对方球队阶段（重建/补强/争冠）——决定它看重未来资产还是即时战力 */}
+        <div className={`chip phase-${targetPhase}`} title={phaseHint}>
+          {target.abbr} 定位：{phaseLabel(targetPhase)}
+        </div>
+        {offseasonWindow && (
+          <div className="chip strong">🔁 休赛期交易窗口（乐透抽签后 {l.offseasonTradeDays} 天）</div>
+        )}
+        <div className={`chip phase-${myPhase}`} title="你的球队定位（按队内最强 5 人平均 OVR）">
+          我方定位：{phaseLabel(myPhase)}
+        </div>
       </div>
 
       <div className="trade-targets">
@@ -223,7 +266,7 @@ export function TradeView({ api }: { api: GameApi }) {
         <div className="trade-col">
           <div className="col-head">
             <span className="strong">我送出的（{myGive.length} 人{givePicks.length ? ` + ${givePicks.length} 签` : ''}）</span>
-            <span className="dim">总估值 {valuation ? valuation.gv : '-'}</span>
+            <span className="dim">🔒 点击行尾锁图标可锁定球员（锁定后 AI 不会为他要价）</span>
           </div>
           <div className="pick-list">
             {[...me.players].sort((a, b) => b.ovr - a.ovr).map((p) =>
@@ -244,7 +287,7 @@ export function TradeView({ api }: { api: GameApi }) {
         <div className="trade-col">
           <div className="col-head">
             <span className="strong">我要的（{theirGive.length} 人{wantPicks.length ? ` + ${wantPicks.length} 签` : ''}）· <TeamLogo abbr={target.abbr} size="xs" />{target.abbr}</span>
-            <span className="dim">总估值 {valuation ? valuation.wv : '-'}</span>
+            <span className="dim">按 {phaseLabel(targetPhase)} 定位估值</span>
           </div>
           <div className="pick-list">
             {[...target.players].sort((a, b) => b.ovr - a.ovr).map((p) =>
@@ -310,12 +353,17 @@ export function TradeView({ api }: { api: GameApi }) {
           const cap = (arr: TradeSuggestion[]) => (showAllResults ? arr : arr.slice(0, 10));
           const row = (s: TradeSuggestion, i: number) => {
             const t = l.teams[s.teamId];
+            // v2.5.0：搜索器里的球员都要显示位置与能力值（我方也显示）
+            const pDesc = (team: Team, pid: number) => {
+              const p = team.players.find((q) => q.id === pid);
+              return p ? `${p.name}（${p.pos}/${p.secPos} · OVR ${p.ovr} · ${p.age}岁）` : '?';
+            };
             const outNames = [
-              ...s.givePids.map((pid) => me.players.find((q) => q.id === pid)?.name ?? '?'),
+              ...s.givePids.map((pid) => pDesc(me, pid)),
               ...s.givePickIdx.map((idx) => pickLabel(l, l.draftPool[idx])),
             ];
             const inNames = [
-              ...s.wantPids.map((pid) => t.players.find((q) => q.id === pid)?.name ?? '?'),
+              ...s.wantPids.map((pid) => pDesc(t, pid)),
               ...s.wantPickIdx.map((idx) => pickLabel(l, l.draftPool[idx])),
             ];
             return (
@@ -324,6 +372,7 @@ export function TradeView({ api }: { api: GameApi }) {
                   <TeamLogo abbr={t.abbr} size="xs" />
                   <b>{t.city} {t.name}</b>
                   <span className="dim">{t.win}-{t.loss}</span>
+                  <span className={`chip phase-${teamPhase(t)} sr-phase`}>{phaseLabel(teamPhase(t))}</span>
                   {s.needsMore && <span className="sr-tag">需追加筹码</span>}
                   <span className={`sr-gain ${s.gain >= 0 ? 'good' : 'bad'}`}>
                     {s.gain >= 0 ? `你赚 ${s.gain.toFixed(1)}` : `你亏 ${(-s.gain).toFixed(1)}`}

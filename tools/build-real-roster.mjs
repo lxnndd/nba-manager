@@ -196,12 +196,19 @@ function scoreOf(pos, sk, h) {
   return s + heightFit(pos, h);
 }
 const posAdj = (a, b) => Math.abs(POS_ORDER.indexOf(a) - POS_ORDER.indexOf(b)) === 1;
+// ---------- v2.5.0 位置覆盖表（用户点名的例外）----------
+// 总原则是"严格照搬 2K27 的 positions 数组"，此表只登记用户明确指定的个例。
+const POS_OVERRIDE = {
+  'Jalen Williams': { pos: 'SG', sec: 'SF' }, // 用户指定：杰伦·威廉姆斯一定是分卫/小前
+};
 // ---------- v2.4.0 位置：严格照搬 2K27 的 positions 数组（用户指定：不做任何推断/修正） ----------
 //   主位置 = positions[0]；副位置 = positions[1]（数据只给 1 个位置时，按相邻位置补一个，
 //   否则引擎的"主副互换"没有第二列可用）。不均衡、不提位、不按身高过滤——
-//   数据源写什么就是什么（杰伦·威廉姆斯 = C/PF、卡鲁索 = SF/PG、德雷蒙德·格林 = PF/C）。
+//   数据源写什么就是什么（德雷蒙德·格林 = PF/C、卡鲁索 = SF/PG），POS_OVERRIDE 里的个例除外。
 const POS_SEC = { PG: 'SG', SG: 'SF', SF: 'PF', PF: 'C', C: 'PF' };
 function positionsOf(p) {
+  const ov = POS_OVERRIDE[p.name];
+  if (ov) return { pos: ov.pos, sec: ov.sec };
   const src = (p.positions ?? []).filter((x) => POS_ORDER.includes(x));
   const pos = src[0] ?? 'SF';
   const sec = src[1] && src[1] !== pos ? src[1] : POS_SEC[pos];
@@ -224,6 +231,12 @@ const skillsOfP = (p) => {
   return sk;
 };
 
+// ---------- v2.5.0 年龄覆盖表（用户点名的已知出生年份）----------
+// 例：杨瀚森 2005-06-26 出生 → 2026-27 赛季 21 岁（旧公式按"选秀届 + 落选秀年龄档"给到 22-23）
+const AGE_OVERRIDE = {
+  'Yang Hansen': 21,   // 杨瀚森 2005-06-26
+};
+
 // 进入联盟年龄（v2.3.0 升级）：旧公式固定 18+h%4，等于假设"人人 19 岁进联盟"，
 // 于是大四落选秀被算小 3-4 岁（实例如 Julian Reese：2025 年落选、马里兰大四，真实 23 岁，
 // 旧公式给 19-22 岁）。真实规律：选秀身价越高越早进联盟（one-and-done 19 岁），
@@ -240,6 +253,7 @@ function entryAgeOf(ovr) {
 //   len=12 → 2015 届(Jokic/KAT)；len=18 → 2009 年前出道的老将(KD/Curry/LBJ，截断)
 function estimateAge(p, h) {
   if (VET_AGE[p.name] != null) return VET_AGE[p.name]; // v2.3.0：截断带老将按真实出生年份
+  if (AGE_OVERRIDE[p.name] != null) return AGE_OVERRIDE[p.name]; // v2.5.0：用户点名的已知出生年份
   const len = (p.ratingHistory ?? []).length;
   let draft;
   if (len >= 18) draft = 2009; // 老将截断带（未被 VET_AGE 覆盖时的兜底）
@@ -266,7 +280,11 @@ function potentialOf(ovr, age, h) {
   return Math.max(58, Math.min(99, p));
 }
 
-function contractOf(ovr) {
+// v2.5.0：合同年限加入年龄因素——高龄老将一年一签（这样"合同年递减 + 到期进自由市场"
+//   在真实名单第一季结束就能看到效果；此前所有人都 ≥2 年，第一年无人到期）
+function contractOf(ovr, age = 26) {
+  if (age >= 35) return 1;
+  if (age >= 33) return 2;
   if (ovr >= 88) return 4;
   if (ovr >= 82) return 3;
   return 2;
@@ -326,7 +344,7 @@ for (let i = 0; i < TEAM_ORDER.length; i++) {
     const pb = posRank[posMap.get(b.name).pos] ?? 9;
     return pa - pb || fixedOverall(b) - fixedOverall(a) || a.name.localeCompare(b.name);
   });
-  const lines = squad.map((p) => lineOf(p, contractOf(fixedOverall(p)), posMap.get(p.name)).line);
+  const lines = squad.map((p) => lineOf(p, contractOf(fixedOverall(p), estimateAge(p, fnv(p.name))), posMap.get(p.name)).line);
   total += squad.length;
   out.push(`  // ${ABBR[i]} ${tName} (${squad.length}人)\n  { t: '${ABBR[i]}', players: [\n${lines.join('\n')}\n  ] },`);
 }
@@ -367,6 +385,7 @@ if (AUDIT) {
   // v2.4.0 位置审计（严格照搬 2K 数据后）：核对"输出的位置是否与 2K positions 完全一致"，
   //   并列出各队位置深度（<2 人的位置由引擎 depthList 在比赛中借人兜底，不再改数据）。
   const mismatch = [];
+  const overrides = [];
   const depthRows = [];
   let checked = 0;
   for (let i = 0; i < TEAM_ORDER.length; i++) {
@@ -380,7 +399,10 @@ if (AUDIT) {
       const wantPos = src[0] ?? 'SF';
       const wantSec = src[1] && src[1] !== wantPos ? src[1] : POS_SEC[wantPos];
       if (pos !== wantPos || sec !== wantSec) {
-        mismatch.push(`${p.name} | ${p.height} | 2K ${src.join('/')} | 输出 ${pos}/${sec}`);
+        const line = `${p.name} | ${p.height} | 2K ${src.join('/')} | 输出 ${pos}/${sec}`;
+        // v2.5.0：POS_OVERRIDE 里的是"用户点名的例外"，单列出来，不算数据不一致
+        if (POS_OVERRIDE[p.name]) overrides.push(line);
+        else mismatch.push(line);
       }
       c[pos]++;
     }
@@ -389,6 +411,10 @@ if (AUDIT) {
   }
   console.log(`=== 与 2K27 数据一致性：核对 ${checked} 人，不一致 ${mismatch.length} 人 ===`);
   console.log(mismatch.join('\n') || '（全部一致）');
+  if (overrides.length) {
+    console.log(`\n=== 用户点名例外 ${overrides.length} 处（POS_OVERRIDE，不计入不一致）===`);
+    console.log(overrides.join('\n'));
+  }
   console.log('\n=== 各队位置深度（<2 人的位置由引擎比赛中借人兜底）===');
   console.log(depthRows.join('\n') || '  全部球队五位置均 ≥2 人');
   console.log('\n=== 点名核对（严格 = 2K positions[0]/positions[1]）===');

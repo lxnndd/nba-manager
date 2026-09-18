@@ -43,6 +43,35 @@ export function perGameLine(p: Player): string {
   return `${(s.pts / g).toFixed(1)}分 ${((s.or + s.dr) / g).toFixed(1)}板 ${(s.ast / g).toFixed(1)}助`;
 }
 
+// v2.5.0：按"常规赛 / 季后赛"取场均（季后赛数据独立统计，poGp/poStats）
+export interface PerGameView {
+  gp: number; min: number; pts: number; reb: number; ast: number; stl: number; blk: number; tov: number;
+  fg: number; tp: number; ft: number;
+}
+export function perGameOf(p: Player, playoff = false): PerGameView {
+  const gp = playoff ? (p.poGp ?? 0) : p.gp;
+  const s = playoff ? (p.poStats ?? p.stats) : p.stats;
+  const g = Math.max(1, gp);
+  return {
+    gp,
+    min: s.min / g,
+    pts: s.pts / g,
+    reb: (s.or + s.dr) / g,
+    ast: s.ast / g,
+    stl: s.stl / g,
+    blk: s.blk / g,
+    tov: s.tov / g,
+    fg: (s.fgm / Math.max(1, s.fga)) * 100,
+    tp: (s.tpm / Math.max(1, s.tpa)) * 100,
+    ft: (s.ftm / Math.max(1, s.fta)) * 100,
+  };
+}
+export function perGameLineOf(p: Player, playoff = false): string {
+  const d = perGameOf(p, playoff);
+  if (d.gp === 0) return playoff ? '季后赛未出场' : '暂无出场';
+  return `${d.pts.toFixed(1)}分 ${d.reb.toFixed(1)}板 ${d.ast.toFixed(1)}助`;
+}
+
 export function fmt1(v: number): string {
   return v.toFixed(1);
 }

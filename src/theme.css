@@ -973,15 +973,18 @@ tr.clickable:hover td { background: rgba(255,166,60,.07); }
 
 /* ===== v2.4.0：乐透抽签可视化 + 选秀确认 ===== */
 .lottery-panel { margin: 8px 0 10px; padding: 8px 10px; background: rgba(255,166,60,.05); border: 1px solid rgba(255,166,60,.28); border-radius: 10px; }
-.lottery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px; margin-top: 6px; }
+.lottery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(268px, 1fr)); gap: 4px; margin-top: 6px; }
 .lottery-row {
-  display: grid; grid-template-columns: 26px 22px 52px 1fr 52px; align-items: center; gap: 6px;
+  display: grid; grid-template-columns: 24px 20px 42px 1fr 76px 44px; align-items: center; gap: 5px;
   padding: 3px 6px; border-radius: 7px; background: var(--bg-soft); font-size: 12px;
 }
 .lottery-row.top4 { border: 1px solid rgba(255,166,60,.55); background: rgba(255,166,60,.10); }
 .lottery-row.mine { box-shadow: inset 0 0 0 1px rgba(88,166,255,.6); }
 .lo-pick { color: var(--accent-2); font-weight: 700; text-align: center; }
 .lo-team { font-weight: 700; }
+/* v2.5.0：签位"原属 · 现属"（易主时高亮） */
+.lo-owner { font-size: 10px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lo-owner.moved { color: var(--accent-2); font-weight: 600; }
 .lo-odds { position: relative; height: 12px; background: rgba(255,255,255,.06); border-radius: 6px; overflow: hidden; }
 .lo-bar { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, rgba(255,166,60,.75), rgba(255,166,60,.35)); }
 .lo-odd-text { position: absolute; right: 4px; top: -2px; font-size: 10px; color: var(--text-dim); }
@@ -995,3 +998,23 @@ tr.clickable:hover td { background: rgba(255,166,60,.07); }
 .dc-meta { font-size: 11.5px; color: var(--text-dim); margin-top: 2px; }
 .dc-skills { font-size: 11px; color: var(--accent-2); margin-top: 2px; }
 .draft-pick-card.pending { border-color: var(--accent-2); background: rgba(255,166,60,.14); }
+
+/* ===== v2.5.0：球队定位 chip / 锁定按钮 / 交易行能力值 ===== */
+.chip.phase-contender { border-color: rgba(255,166,60,.6); color: #ffd166; }
+.chip.phase-retool { border-color: rgba(88,166,255,.5); color: #8ec7ff; }
+.chip.phase-rebuild { border-color: rgba(160,160,180,.5); color: var(--text-dim); }
+.sr-phase { font-size: 10.5px; padding: 1px 6px; }
+.pick-row .pl-ovr { display: flex; align-items: center; }
+.pick-row.locked { opacity: .92; border-color: rgba(255,209,102,.45); }
+.lock-btn {
+  margin-left: 4px; background: none; border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text-dim); cursor: pointer; font-size: 12px; padding: 1px 5px; line-height: 1.4;
+}
+.lock-btn:hover { border-color: var(--accent-2); color: var(--accent-2); }
+.lock-btn.on { border-color: rgba(255,209,102,.7); color: #ffd166; background: rgba(255,209,102,.12); }
+
+/* 战报总计行 */
+.box-total-row td { border-top: 2px solid var(--border); font-weight: 700; color: var(--accent-2); }
+
+/* 自由市场位置筛选 */
+.fa-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }

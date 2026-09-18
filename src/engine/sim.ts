@@ -67,6 +67,11 @@ function box(side: Side, p: Player): BoxLine {
   return side.lines.get(p.id)!;
 }
 
+// v2.5.0 空统计行（季后赛统计初始化用）
+function freshStatLine(): Player['stats'] {
+  return { min: 0, pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, or: 0, dr: 0 };
+}
+
 function addScore(side: Side, pts: number): void {
   side.score += pts;
 }
@@ -584,7 +589,8 @@ export function simulateGame(
   awayTeam: Team,
   homeTeam: Team,
   rng: Rng,
-  accumulate = true,
+  // v2.5.0：'playoff' = 累加进"季后赛独立统计"（poGp/poStats），常规赛与季后赛数据分开记录
+  accumulate: boolean | 'playoff' = true,
   injurySeed?: number,
   mods?: { away: TeamMods | null; home: TeamMods | null; poff?: boolean }
 ): GameOutcome {
@@ -666,8 +672,12 @@ export function simulateGame(
     line.min = Math.round(line.min * scale);
   }
 
-  // box → 赛季累计（一次性，防双计；季后赛等非正式比赛 accumulate=false 不累计常规统计）
+  // box → 赛季累计（一次性，防双计）
+  //   accumulate=true       → 常规赛统计（gp/stats）
+  //   accumulate='playoff'  → 季后赛独立统计（poGp/poStats，v2.5.0）
+  //   accumulate=false      → 不累计（热身/单场模拟）
   if (accumulate) {
+    const playoff = accumulate === 'playoff';
     for (const side of [away, home]) {
       // 首发：手动轮换 = 位置内目标分钟最高者；自动 = 队内各位置第 1 人
       const starterIds = new Set<number>();
@@ -678,12 +688,16 @@ export function simulateGame(
       for (const p of side.team.players) {
         const l = side.lines.get(p.id)!;
         if (l.min === 0 && l.fga === 0 && l.fta === 0 && l.pf === 0 && l.tov === 0) continue; // 未出场
-        p.gp++;
-        if (starterIds.has(p.id)) p.starts++;
-        const s = p.stats;
+        if (playoff) p.poGp = (p.poGp ?? 0) + 1;
+        else {
+          p.gp++;
+          if (starterIds.has(p.id)) p.starts++;
+        }
+        const s = playoff ? (p.poStats ?? freshStatLine()) : p.stats;
         s.min += l.min; s.pts += l.pts; s.reb += l.reb; s.ast += l.ast; s.stl += l.stl;
         s.blk += l.blk; s.tov += l.tov; s.pf += l.pf; s.fgm += l.fgm; s.fga += l.fga;
         s.tpm += l.tpm; s.tpa += l.tpa; s.ftm += l.ftm; s.fta += l.fta; s.or += l.or; s.dr += l.dr;
+        if (playoff && !p.poStats) p.poStats = s;
       }
     }
   }

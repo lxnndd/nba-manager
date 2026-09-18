@@ -109,6 +109,9 @@ export interface Player {
   // 赛季累计统计（由比赛模拟累加）
   gp: number;
   stats: SeasonStatLine;
+  // ---- v2.5.0 季后赛独立统计（常规赛 / 季后赛分开；常规赛结束后阵容页切换显示季后赛数据）----
+  poGp: number;
+  poStats: SeasonStatLine;
 }
 
 // 轮换档位（min=null 时按深度自动）：首发/主要轮换/边缘
@@ -248,6 +251,7 @@ export interface LotteryResult {
   order: number[];   // 30 队按选秀顺位排列（前 14 位为乐透队）
   odds: number[];    // 与 order 一一对应的"状元概率"（乐透队按战绩档位给，非乐透队 0）
   top4: number[];    // 抽中前 4 顺位的球队 id（= order 前 4，便于高亮）
+  lotteryIds: number[]; // v2.5.0：乐透区 14 支球队 id（UI 只展示乐透区，季后赛队不参与抽签）
 }
 
 // ============ v2.1 选秀大会状态（休赛期手动操作：玩家持有的签可挑选 80 人池） ============
@@ -317,6 +321,10 @@ export interface LeagueState {
   nextDraftClass: Player[];
   // ---- v2.4.0 乐透抽签结果（休赛期第一步展示：概率 + 顺位 + 前 4 高亮）----
   lottery: LotteryResult | null;
+  // ---- v2.5.0 锁定球员（交易市场：被锁定的自有球员不会被 AI 报价 / 不会被搜索器算作筹码）----
+  lockedPids: number[];
+  // ---- v2.5.0 休赛期交易窗口（乐透抽签后 3 天；offseasonStep=1 期间可用）----
+  offseasonTradeDays: number;
 }
 
 export interface GameRef {

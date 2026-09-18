@@ -106,30 +106,57 @@ export function computeSeasonAwards(l: LeagueState): void {
   const rotList = [...rookies].sort((x, y) => rotScore(y) - rotScore(x));
   if (rotList.length) a.rookie = entryOf(rotList[0]);
 
-  // ---- 新秀一阵二阵：后场 2 + 前场 3 × 2 阵（放宽出勤到 30 场） ----
-  const rkPool = cands.filter((c) => c.p.exp === 1 && c.p.gp >= 30);
+  // ---- 新秀一阵二阵：后场 2 + 前场 3 × 2 阵 ----
+  // v2.5.0：门槛放宽到 20 场，且某一阵某侧人数不足时**按总分补齐到 5 人**
+  //   （此前前场/后场新秀不够会出现"二阵只有 4 个人"）
+  const rkPool = cands.filter((c) => c.p.exp === 1 && c.p.gp >= 20);
   const rkSide = (side: Pos[]) =>
     rkPool.filter((c) => side.includes(c.p.pos)).sort((x, y) => rotScore(y) - rotScore(x));
+  const rkAll = [...rkPool].sort((x, y) => rotScore(y) - rotScore(x));
+  const rkUsed = new Set<number>();
+  const takeRk = (pool: Cand[], n: number): AwardEntry[] => {
+    const out: AwardEntry[] = [];
+    for (const c of pool) {
+      if (out.length >= n) break;
+      if (!rkUsed.has(c.p.id)) { out.push(entryOf(c)); rkUsed.add(c.p.id); }
+    }
+    return out;
+  };
   const rkBc = rkSide(BACKCOURT);
   const rkFc = rkSide(FRONTCOURT);
   for (let t = 0; t < 2; t++) {
-    a.allRookie[t] = [
-      ...rkBc.slice(t * 2, t * 2 + 2),
-      ...rkFc.slice(t * 3, t * 3 + 3),
-    ].map(entryOf);
+    const picked = [
+      ...takeRk(rkBc.slice(t * 2), 2),
+      ...takeRk(rkFc.slice(t * 3), 3),
+    ];
+    if (picked.length < 5) picked.push(...takeRk(rkAll, 5 - picked.length)); // 补齐
+    a.allRookie[t] = picked;
   }
 
   // ---- v2.0 All-Defense 一阵二阵：后场 2 + 前场 3 × 2 阵（按 DPOY 尺度，60 场门槛） ----
+  // v2.5.0：同样在人数不足时按防守分补齐到 5 人
   const defPool = gpMin(60);
   const defSide = (side: Pos[]) =>
     defPool.filter((c) => side.includes(c.p.pos)).sort((x, y) => dpoyScore(y) - dpoyScore(x));
+  const dAll = [...defPool].sort((x, y) => dpoyScore(y) - dpoyScore(x));
+  const dUsed = new Set<number>();
+  const takeDef = (pool: Cand[], n: number): AwardEntry[] => {
+    const out: AwardEntry[] = [];
+    for (const c of pool) {
+      if (out.length >= n) break;
+      if (!dUsed.has(c.p.id)) { out.push(entryOf(c)); dUsed.add(c.p.id); }
+    }
+    return out;
+  };
   const dBC = defSide(BACKCOURT);
   const dFC = defSide(FRONTCOURT);
   for (let t = 0; t < 2; t++) {
-    a.allDefense[t] = [
-      ...dBC.slice(t * 2, t * 2 + 2),
-      ...dFC.slice(t * 3, t * 3 + 3),
-    ].map(entryOf);
+    const picked = [
+      ...takeDef(dBC.slice(t * 2), 2),
+      ...takeDef(dFC.slice(t * 3), 3),
+    ];
+    if (picked.length < 5) picked.push(...takeDef(dAll, 5 - picked.length));
+    a.allDefense[t] = picked;
   }
 
   l.awards = a;

@@ -4,8 +4,9 @@ import type { AiTradeOffer, Attrs, BodyAttrs, BoxLine, DraftPick, FinalsLine, Ga
 import { SAVE_VERSION } from './types';
 import { simulateGame, teamEffMods } from './sim';
 import { rollPostGameEvent } from './events';
-import { salaryFor, resalaryIfLegacy, genFreeAgent, realFaPlayer, genBody, assignTags, deriveSkills, fromRealSkills, potentialToStar, POS_SEC, freshCareer, freshPickPool, rollPickPool, genDraftClass, ensureMeasure } from './gen';
+import { salaryFor, resalaryIfLegacy, genFreeAgent, realFaPlayer, genBody, assignTags, deriveSkills, fromRealSkills, potentialToStar, POS_SEC, freshCareer, freshPickPool, rollPickPool, genDraftClass, ensureMeasure, freshStatLine } from './gen';
 import { REAL_FA, REAL_ROSTER, ZH_NAME_MAP, type RealPlayerInfo } from './realRoster';
+import { enNameToZh } from './data';
 import { clamp, mulberry32, type Rng } from './rng';
 
 export interface DayReport {
@@ -120,13 +121,15 @@ export interface LeaderRow {
   value: number;
 }
 
-export function leaders(l: LeagueState, stat: string, minGp = 15): LeaderRow[] {
+export function leaders(l: LeagueState, stat: string, minGp = 15, playoff = false): LeaderRow[] {
   const rows: LeaderRow[] = [];
   for (const t of l.teams) {
     for (const p of t.players) {
-      if (p.gp < minGp) continue;
-      const s = p.stats;
-      const g = p.gp;
+      // v2.5.0：季后赛榜单用独立统计（poGp/poStats）
+      const gp = playoff ? (p.poGp ?? 0) : p.gp;
+      if (gp < minGp) continue;
+      const s = playoff ? (p.poStats ?? p.stats) : p.stats;
+      const g = Math.max(1, gp);
       let value = 0;
       switch (stat) {
         case 'pts': value = s.pts / g; break;
@@ -282,7 +285,7 @@ export function simPlayoffGame(l: LeagueState, roundIdx: number, seriesIdx: numb
   // v1.2 季后赛气质系数：化学反应权重提升（化学反应 → 季后赛表现）
   const avgFans = l.teams.reduce((a, t) => a + t.fans, 0) / Math.max(1, l.teams.length);
   const { result, injuries } = simulateGame(
-    l.teams[series.awayId], l.teams[series.homeId], rng, false, injSeed,
+    l.teams[series.awayId], l.teams[series.homeId], rng, 'playoff', injSeed,
     {
       away: teamEffMods(l.teams[series.awayId], false, true, avgFans),
       home: teamEffMods(l.teams[series.homeId], true, true, avgFans),
@@ -340,6 +343,38 @@ const OLD_CULTURE_STYLE: Record<string, TeamStyleId> = { defense: 'iron', stars:
 const STYLE_BY_SEED = ['youth', 'star', 'iron', 'locker', 'brand'] as const;
 // v2.0 执教风格（AI 队默认按种子分配）
 const COACH_BY_SEED = ['iron', 'locker', 'brand'] as const;
+
+// ---------- v2.5.0 球队阶段（重建 / 补强 / 争冠）----------
+// 按"队内最强 5 人（≈首发）的平均 OVR"划分（用户指定阈值）：
+//   > 85 争冠：看重即时战力，愿意为即战力付出未来资产（选秀权 / 年轻潜力球员）
+//   80-85 补强：较为看重即时战力
+//   < 80 重建：非常重视未来资产（选秀权、年轻球员），老将不值钱
+export type TeamPhase = 'contender' | 'retool' | 'rebuild';
+
+export function teamPhase(t: Team): TeamPhase {
+  const top5 = [...t.players].sort((a, b) => b.ovr - a.ovr).slice(0, 5);
+  const avg = top5.length ? top5.reduce((s, p) => s + p.ovr, 0) / top5.length : 0;
+  if (avg > 85) return 'contender';
+  if (avg >= 80) return 'retool';
+  return 'rebuild';
+}
+
+export function phaseLabel(p: TeamPhase): string {
+  return p === 'contender' ? '争冠' : p === 'retool' ? '补强' : '重建';
+}
+
+// 球员在特定球队阶段眼中的价值权重：年轻=未来资产、老将=即时战力、26-28 岁中性
+function isFutureAsset(p: Player): boolean {
+  return p.age <= 25 || p.exp <= 3;
+}
+export function phasePlayerWeight(p: Player, phase: TeamPhase): number {
+  if (isFutureAsset(p)) return phase === 'contender' ? 0.75 : phase === 'retool' ? 0.92 : 1.28;
+  if (p.age >= 29) return phase === 'contender' ? 1.2 : phase === 'retool' ? 1.05 : 0.8;
+  return 1;
+}
+export function phasePickWeight(phase: TeamPhase): number {
+  return phase === 'contender' ? 0.7 : phase === 'retool' ? 0.9 : 1.35;
+}
 
 // ---------- 球员评分（MVP 用） ----------
 export function playerScore(p: Player): number {
@@ -542,6 +577,20 @@ export function migrateSave(l: LeagueState): void {
   if (l.draft && (l.draft as { year?: number }).year == null) l.draft.year = l.year + 1;
   // v2.4.0：乐透抽签结果（旧档无 → null，下次休赛期重新抽）
   l.lottery = l.lottery ?? null;
+  // v2.5.0：旧档抽签结果补乐透区球队 id（UI 用 lotteryIds 只渲染乐透区 14 行）
+  if (l.lottery && !Array.isArray(l.lottery.lotteryIds)) {
+    l.lottery.lotteryIds = l.lottery.order.slice(0, 14);
+  }
+  // v2.5.0：锁定球员 + 休赛期交易窗口 + 季后赛统计字段
+  l.lockedPids = l.lockedPids ?? [];
+  l.offseasonTradeDays = l.offseasonTradeDays ?? 0;
+  for (const p of [...l.teams.flatMap((t) => t.players), ...l.freeAgents, ...(l.nextDraftClass ?? [])]) {
+    if (p.poStats == null) p.poStats = freshStatLine();
+    if (p.poGp == null) p.poGp = 0;
+    // v2.5.0：新秀名字全部汉化——旧存档里"美国新秀的英文名"也翻译成中文译名
+    //   （enNameToZh 对认不出的名字原样返回，所以真实球员的英文名不会被误改）
+    if (/^[A-Za-z]/.test(p.name)) p.name = enNameToZh(p.name);
+  }
   // v2.3.0：下一届新秀预测名单（旧档补建）+ 体测数据（体重/臂展）补全
   l.nextDraftClass = l.nextDraftClass ?? [];
   if (l.nextDraftClass.length === 0) {
@@ -663,20 +712,8 @@ export function lotteryOrder(l: LeagueState, rng: Rng): number[] {
   return lotteryDraw(l, rng).order;
 }
 
-// v2.3.0 Stepien 规则：不能连续两年没有首轮签。
-// 传入"本次打算送出的签下标"，返回违规的起始年份（null = 合规）。
-export function stepienViolation(l: LeagueState, teamId: number, givingPickIdx: number[]): number | null {
-  const horizon = [l.year + 1, l.year + 2, l.year + 3];
-  const owned = new Set<number>();
-  l.draftPool.forEach((pk, i) => {
-    if (pk.round !== 1 || givingPickIdx.includes(i)) return;
-    if (pk.o === teamId) owned.add(pk.year);
-  });
-  for (let i = 0; i < horizon.length - 1; i++) {
-    if (!owned.has(horizon[i]) && !owned.has(horizon[i + 1])) return horizon[i];
-  }
-  return null;
-}
+// v2.3.0 Stepien 规则（"不能连续两年没有首轮签"）——v2.5.0 已按用户要求移除，不再约束交易。
+// 函数保留仅作历史记录，任何地方都不应再调用它。
 
 // v2.3.0 首轮新秀薪资阶位（Rookie Scale 简化：状元 1200 万 → 30 号秀 200 万，线性递减）
 export function rookieScaleSalary(pickNo: number): number {
@@ -760,15 +797,7 @@ export function evaluateTrade(
     const pk = l.draftPool[i];
     if (!pk || pk.o !== ai.id) return { accept: false, reason: '想要的选秀权不属于对方' };
   }
-  // v2.3.0 Stepien 规则：不能连续两年没有首轮签（联盟硬性规定，双方都受约束）
-  const stepMe = stepienViolation(l, me.id, givePickIdx);
-  if (stepMe) {
-    return { accept: false, reason: `Stepien 规则：交易后你将连续两年（${stepMe}、${stepMe + 1} 年）没有首轮签，联盟不允许` };
-  }
-  const stepAi = stepienViolation(l, ai.id, wantPickIdx);
-  if (stepAi) {
-    return { accept: false, reason: `Stepien 规则：${ai.name} 交易后将连续两年（${stepAi}、${stepAi + 1} 年）没有首轮签，联盟不允许` };
-  }
+  // v2.5.0：Stepien 规则已按用户要求移除（不再限制"连续两年没有首轮签"的交易）
   // 选秀权冻结：超奢侈税线（第一土豪线）的球队不能送出自己的选秀权（真实 NBA 土豪线罚则简化版）
   if (givePickIdx.length > 0 && payrollOf(me.players) > TAX_LINE) {
     return { accept: false, reason: `你的球队工资单 ${moneyW(payrollOf(me.players))} 已超奢侈税线：未来选秀权被冻结，不能作为交易筹码` };
@@ -815,8 +844,6 @@ export function evaluateTrade(
   const wvPicks = wantPickIdx.reduce((s, i) => s + pickValue(l, l.draftPool[i]), 0);
   const gv = gvPlayers + gvPicks;
   const wv = wvPlayers + wvPicks;
-  // AI 视角：送出 want，拿回 give
-  const aiGain = gv - wv;
   const meAfter = [...me.players.filter((p) => !givePids.includes(p.id)), ...want];
   const aiAfter = [...ai.players.filter((p) => !wantPids.includes(p.id)), ...give];
   const err = tradeRuleError(l, [
@@ -824,31 +851,45 @@ export function evaluateTrade(
     { t: ai, after: aiAfter, sending: want },
   ]);
   if (err) return { accept: false, reason: err };
-  // 接受阈值：基准不吃亏超过 6% 就换；再按 AI 球队战略（战绩与年龄结构）修正。
-  const wr = ai.win / Math.max(1, ai.win + ai.loss);
+  // ---------- v2.5.0 AI 视角估值：按 AI 球队阶段（重建/补强/争冠）调整资产偏好 ----------
+  //   争冠队：选秀权与年轻球员打 7 折（更愿意付出未来换即战力）、即战力老将溢价 1.2 倍；
+  //   补强队：轻微倾斜（0.9 / 1.05）；
+  //   重建队：选秀权与年轻球员溢价 1.35 倍（非常重视未来资产）、老将打 8 折。
+  const phase = teamPhase(ai);
+  const wPlayer = (p: Player) => tradeValue(p) * phasePlayerWeight(p, phase);
+  const wPick = (v: number) => v * phasePickWeight(phase);
+  // AI 送出（want）与拿回（give）都按它的偏好折算
+  const aiGiveVal = want.reduce((s, p) => s + wPlayer(p), 0) + wPick(wvPicks);
+  const aiGetVal = give.reduce((s, p) => s + wPlayer(p), 0) + wPick(gvPicks);
+  const aiGain = aiGetVal - aiGiveVal;
+  // 接受阈值：基准不吃亏超过 6% 就换（以 AI 送出物的偏好价值为基准）
   const avgAge = (list: Player[]) => (list.length ? list.reduce((s, p) => s + p.age, 0) / list.length : 99);
   const giveAge = avgAge(give);
   const wantAge = avgAge(want);
-  let tol = 0.06 * wv;
+  let tol = 0.06 * aiGiveVal;
   let mood = '';
-  if (wr > 0 && wr < 0.42) {
-    // 重建队
-    if (giveAge <= 25) { tol += 0.1 * wv; mood = '（重建中：乐于收年轻资产与选秀权，愿吃小亏）'; }
-    else if (wantAge >= 30) { tol += 0.08 * wv; mood = '（重建中：老将可以打折出手）'; }
-    else if (giveAge >= 30) { tol -= 0.1 * wv; mood = '（重建中：收老将要求明显赚头）'; }
-  } else if (wr >= 0.58) {
-    // 争冠队
-    if (giveAge >= 29) { tol += 0.06 * wv; mood = '（争冠中：愿为即战力买单）'; }
-    else if (wantAge <= 25) { tol += 0.05 * wv; mood = '（争冠中：可透支年轻资产换现在）'; }
+  if (phase === 'rebuild') {
+    // 重建队：乐于收年轻资产与选秀权，老将要求明显赚头
+    if (giveAge <= 25) { tol += 0.1 * aiGiveVal; mood = '（重建中：乐于收年轻资产与选秀权，愿吃小亏）'; }
+    else if (wantAge >= 30) { tol += 0.08 * aiGiveVal; mood = '（重建中：老将可以打折出手）'; }
+    else if (giveAge >= 30) { tol -= 0.1 * aiGiveVal; mood = '（重建中：收老将要求明显赚头）'; }
+    else mood = '（重建中：非常重视未来资产）';
+  } else if (phase === 'contender') {
+    // 争冠队：愿为即战力买单、可透支年轻资产
+    if (giveAge >= 29) { tol += 0.06 * aiGiveVal; mood = '（争冠中：愿为即战力买单）'; }
+    else if (wantAge <= 25) { tol += 0.05 * aiGiveVal; mood = '（争冠中：可透支年轻资产换现在）'; }
+    else mood = '（争冠中：看重即时战力）';
+  } else {
+    mood = '（补强中：较为看重即时战力）';
   }
   const valText = `${gvPlayers.toFixed(1)}${gvPicks ? `+签${gvPicks.toFixed(1)}` : ''} ↔ ${wvPlayers.toFixed(1)}${wvPicks ? `+签${wvPicks.toFixed(1)}` : ''}`;
   if (aiGain >= -tol) {
     const feel = aiGain >= 0 ? '对方觉得这笔交易划算' : '对方觉得基本对等';
-    return { accept: true, reason: `${feel}${mood}（估值 ${valText}，差 ${aiGain.toFixed(1)}）` };
+    return { accept: true, reason: `${feel}${mood}（估值 ${valText}，按${phaseLabel(phase)}偏好折算后差 ${aiGain.toFixed(1)}）` };
   }
   return {
     accept: false,
-    reason: `对方拒绝${mood}：送出价值 ${wv.toFixed(1)}，拿回 ${gv.toFixed(1)}，亏了 ${(-aiGain).toFixed(1)} 点（最多容忍 ${tol.toFixed(1)} 点）。估值：${valText}`,
+    reason: `对方拒绝${mood}：送出价值 ${wv.toFixed(1)}，拿回 ${gv.toFixed(1)}（按${phaseLabel(phase)}偏好折算后亏 ${(-aiGain).toFixed(1)} 点，最多容忍 ${tol.toFixed(1)} 点）。估值：${valText}`,
   };
 }
 
@@ -968,10 +1009,12 @@ export function tryAITradeOfferToUser(l: LeagueState, rng: Rng): boolean {
   if (!others.length) return false;
 
   // ---------- 动机 A：AI 想要你的一名球员（该位置能明显升级） ----------
+  // v2.5.0：被锁定的球员不会被 AI 报价（用户在交易市场手动锁定）
+  const locked = new Set(l.lockedPids ?? []);
   const wants: { ai: Team; target: Player }[] = [];
   for (const ai of others) {
     for (const p of me.players) {
-      if (p.ovr < 78) continue;
+      if (p.ovr < 78 || locked.has(p.id)) continue;
       const same = ai.players.filter((q) => q.pos === p.pos);
       const best = same.length ? Math.max(...same.map((q) => q.ovr)) : 0;
       if (!same.length || p.ovr - best >= 3) wants.push({ ai, target: p });
@@ -1093,7 +1136,7 @@ export function rejectTradeOffer(l: LeagueState, offerId: number): void {
 // 玩家勾选自己愿意送出的筹码（1-N 名球员 / 选秀权）→ 遍历 29 支球队，搜索对方愿意接受的组合：
 //   ① 单换单 ② 对方「球员 + 选秀权」 ③ 对方打包两人 ④ 都不成立时自动尝试追加你的其他筹码
 //      （真实场景：AI 往往想要你好几个人，第 ④ 类结果会标注"需追加"）
-// 只返回 evaluateTrade 判定的可成交方案（含名单/薪资/Stepien/82 场等全部规则校验）。
+// 只返回 evaluateTrade 判定的可成交方案（含名单/薪资/82 场等全部规则校验；v2.5.0 起无 Stepien 检查）。
 export interface TradeSuggestion {
   teamId: number;
   givePids: number[];       // 你送出（球员）

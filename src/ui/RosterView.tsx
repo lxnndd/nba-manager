@@ -1,10 +1,9 @@
 // 阵容视图：五位置深度卡 + 轮换/球权/战术自定义（v0.3.1）+ 位置拖拽换位（v0.3.7）
 import { useState } from 'react';
 import type { LeagueState, Player, Pos } from '../engine/types';
-import { perGame } from '../engine/league';
 import { manualRotation, targetMinutes, AUTO_MINUTES } from '../engine/sim';
 import { repositionPlayer, TEAM_STYLES, COACH_STYLES } from '../engine/gen';
-import { POS_CN, money, ovrClass } from './format';
+import { POS_CN, money, ovrClass, perGameLineOf } from './format';
 import { PlayerModal } from './PlayerModal';
 import { PlayerFace } from './PlayerFace';
 import type { GameApi } from './useGame';
@@ -20,6 +19,8 @@ export function RosterView({ api }: { api: GameApi }) {
   const [dragPid, setDragPid] = useState<number | null>(null);
   const [dropPos, setDropPos] = useState<Pos | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // v2.5.0：常规赛结束后（季后赛进行中/已结束）阵容页切换显示季后赛数据
+  const poMode = l.playoffRounds.length > 0;
 
   const move = (pos: Pos, idx: number, dir: -1 | 1) => {
     const same = me.players.filter((p) => p.pos === pos);
@@ -269,7 +270,9 @@ export function RosterView({ api }: { api: GameApi }) {
                       )}
                     </div>
                   </div>
-                  <div className="rc-mid">{perGame(p).pts.toFixed(1)}分 {perGame(p).reb.toFixed(1)}板 {perGame(p).ast.toFixed(1)}助</div>
+                  <div className={`rc-mid ${poMode ? 'po' : ''}`}>
+                    {poMode ? `季后赛 ${perGameLineOf(p, true)}` : perGameLineOf(p, false)}
+                  </div>
                   <div className="rc-right">
                     <span className="rc-salary">{money(p.salary)}</span>
                     <span className="move-btns" onClick={(e) => e.stopPropagation()}>

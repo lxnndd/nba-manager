@@ -1,7 +1,7 @@
 // ============ 核心类型 ============
 import type { Attrs, BodyAttrs, DraftPick, LeagueState, PickRound, Player, Pos, Skills18, Team, TeamStyleId, GameRef } from './types';
 import { SAVE_VERSION } from './types';
-import { TEAMS, FIRST_NAMES, LAST_NAMES, FIRST_EN, LAST_EN, POS_ORDER, NATION_POOLS, type NationPool } from './data';
+import { TEAMS, FIRST_NAMES, LAST_NAMES, FIRST_EN, LAST_EN, POS_ORDER, NATION_POOLS, enNameToZh, type NationPool } from './data';
 import { REAL_FA, REAL_ROSTER, type RealPlayerInfo } from './realRoster';
 import { clamp, gauss, mulberry32, pick, randInt, shuffle, type Rng } from './rng';
 
@@ -336,11 +336,13 @@ export function genPlayer(
     career: freshCareer(),
     nation: '美国',
     gp: 0,
-    stats: { min: 0, pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, or: 0, dr: 0 },
+    stats: freshStatLine(),
+    poGp: 0,
+    poStats: freshStatLine(),
   };
 }
 
-function freshStats(): Player['stats'] {
+export function freshStatLine(): Player['stats'] {
   return { min: 0, pts: 0, reb: 0, ast: 0, stl: 0, blk: 0, tov: 0, pf: 0, fgm: 0, fga: 0, tpm: 0, tpa: 0, ftm: 0, fta: 0, or: 0, dr: 0 };
 }
 
@@ -491,6 +493,9 @@ function finishLeague(rng: Rng, teams: Team[], idSeq: { v: number }, seed: numbe
     nextDraftClass,
     // v2.4.0 乐透抽签结果（休赛期抽签时写入）
     lottery: null,
+    // v2.5.0 锁定球员（交易市场）+ 休赛期交易窗口天数
+    lockedPids: [],
+    offseasonTradeDays: 0,
   };
 }
 
@@ -557,7 +562,9 @@ export function createRealLeague(seed: number): LeagueState {
       career: freshCareer(),
       nation: '美国',
       gp: 0,
-      stats: freshStats(),
+      stats: freshStatLine(),
+      poGp: 0,
+      poStats: freshStatLine(),
     }));
     return {
       id: i, name: info.name, city: info.city, en: info.en, abbr: info.abbr, conf: info.conf,
@@ -679,10 +686,18 @@ const usedEnNames = new Set<string>(); // 英文名防重（模块级，选秀/�
 
 export function makeEnName(rng: Rng): string {
   for (let t = 0; t < 40; t++) {
-    const cand = pick(rng, FIRST_EN) + ' ' + pick(rng, LAST_EN);
-    if (!usedEnNames.has(cand)) { usedEnNames.add(cand); return cand; }
+    const f = pick(rng, FIRST_EN);
+    const l = pick(rng, LAST_EN);
+    const cand = f + ' ' + l;
+    if (!usedEnNames.has(cand)) {
+      usedEnNames.add(cand);
+      // v2.5.0：新秀名字全部汉化（美国新秀也显示中文译名，如 Jalen Carter → 杰伦·卡特）
+      return enNameToZh(cand);
+    }
   }
-  return pick(rng, FIRST_EN) + ' ' + pick(rng, LAST_EN) + ' Jr.';
+  const f2 = pick(rng, FIRST_EN);
+  const l2 = pick(rng, LAST_EN);
+  return enNameToZh(f2 + ' ' + l2) + '二世';
 }
 
 // 按国家姓名池生成中文译名（欧美非拉美 = 名·姓；中日韩 = 姓+名）
@@ -738,7 +753,10 @@ export function genDraftClass(rng: Rng): Player[] {
 export function resetSeasonStats(p: Player): void {
   p.gp = 0;
   p.starts = 0;
-  p.stats = freshStats();
+  p.stats = freshStatLine();
+  // v2.5.0：季后赛统计独立，新赛季一并清零
+  p.poGp = 0;
+  p.poStats = freshStatLine();
 }
 
 // ---------- 自由球员 ----------
@@ -794,7 +812,9 @@ export function realFaPlayer(id: number, rp: RealPlayerInfo): Player {
     career: freshCareer(),
     nation: '美国',
     gp: 0,
-    stats: freshStats(),
+    stats: freshStatLine(),
+    poGp: 0,
+    poStats: freshStatLine(),
   };
 }
 

@@ -8,7 +8,7 @@ import { SALARY_CAP, TAX_LINE, ROSTER_MAX, payrollOf } from '../engine/league';
 import { money, ovrClass, POS_CN } from './format';
 import { PlayerFace } from './PlayerFace';
 import { PlayerModal } from './PlayerModal';
-import type { Player } from '../engine/types';
+import type { Player, Pos } from '../engine/types';
 import type { GameApi } from './useGame';
 
 interface DraftOffer { years: number; salary: number }
@@ -27,13 +27,22 @@ export function FreeMarketView({ api }: { api: GameApi }) {
   const overTax = payroll > TAX_LINE;
   const rosterFull = me.players.length >= ROSTER_MAX;
 
+  // v2.5.0：按位置筛选（五个位置 + 全部）
+  const [posFilter, setPosFilter] = useState<Pos | 'ALL'>('ALL');
   // ⚠️ 依赖里必须带 length：引擎对 freeAgents 是"就地增删"（splice/push），
   // 数组引用不变 → 只用 [l.freeAgents] 时 useMemo 不会重算，
   // 表现就是"签约成功后球员没立即消失，切换两次才刷新"。
   const faSorted = useMemo(
-    () => [...l.freeAgents].sort((a, b) => b.ovr - a.ovr || b.potential - a.potential || a.id - b.id),
-    [l.freeAgents, l.freeAgents.length],
+    () => [...l.freeAgents]
+      .filter((p) => posFilter === 'ALL' || p.pos === posFilter || p.secPos === posFilter)
+      .sort((a, b) => b.ovr - a.ovr || b.potential - a.potential || a.id - b.id),
+    [l.freeAgents, l.freeAgents.length, posFilter],
   );
+  const posCount = useMemo(() => {
+    const c: Record<string, number> = { ALL: l.freeAgents.length, PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
+    for (const p of l.freeAgents) c[p.pos] = (c[p.pos] ?? 0) + 1;
+    return c;
+  }, [l.freeAgents, l.freeAgents.length]);
 
   const toggleOffer = (pid: number) => {
     setOffers((prev) => {
@@ -89,6 +98,15 @@ export function FreeMarketView({ api }: { api: GameApi }) {
 
       <div className="action-card">
         <div className="action-title">💼 自由球员市场（赛季中 · 即时签约）</div>
+        {/* v2.5.0：位置筛选（含副位置可打的球员） */}
+        <div className="fa-filter">
+          <span className="dim">按位置筛选：</span>
+          {(['ALL', 'PG', 'SG', 'SF', 'PF', 'C'] as const).map((k) => (
+            <button key={k} className={`chip-btn ${posFilter === k ? 'on' : ''}`} onClick={() => setPosFilter(k)}>
+              {k === 'ALL' ? '全部' : POS_CN[k]} <span className="dim">{posCount[k] ?? 0}</span>
+            </button>
+          ))}
+        </div>
         {rosterFull && <div className="warn-text" style={{ marginBottom: 8 }}>⚠️ 名单已满 {ROSTER_MAX} 人：请先裁人/交易腾出名额。</div>}
 
         <div className="fa-table">
