@@ -2,7 +2,7 @@
 // 验证：名单结构、比分分布、全季推进、季后赛、赛季奖项、休赛期（FA/AI交易）、存档迁移
 import { createLeague, createRealLeague, repositionPlayer, bodyKeys, genRookie, genDraftClass, genFreeAgent, TEAM_STYLES, COACH_STYLES, applyTeamStyle, applyCoachStyle, assignTags, calcOvr, SKILL_KEYS, genSkills, POS_SEC } from './gen';
 import { simulateGame, bondMods, teamEffMods } from './sim';
-import { simDay, runPlayoffRound, simPlayoffGame, playoffChampion, evaluateTrade, applyTrade, standings, leaders, nextGameOf, playedCount, migrateSave, teamStrength, pickValue, tradeValue, ROSTER_MAX, payrollOf, SALARY_CAP, TAX_LINE, refreshPlayoffPlaceholders, tryAITradeOfferToUser, acceptTradeOffer, rejectTradeOffer, pickLabel, lotteryOrder, rookieScaleSalary, searchTrades, GP_CAP, GP_TRADE_TOLERANCE, teamPhase, phaseLabel, phasePlayerWeight, phasePickWeight } from './league';
+import { simDay, runPlayoffRound, simPlayoffGame, playoffChampion, evaluateTrade, applyTrade, standings, leaders, nextGameOf, playedCount, migrateSave, teamStrength, pickValue, tradeValue, ROSTER_MAX, payrollOf, SALARY_CAP, TAX_LINE, refreshPlayoffPlaceholders, tryAITradeOfferToUser, acceptTradeOffer, rejectTradeOffer, pickLabel, lotteryOrder, rookieScaleSalary, searchTrades, searchTradeTargets, GP_CAP, GP_TRADE_TOLERANCE, teamPhase, phaseLabel, phasePlayerWeight, phasePickWeight, phaseValue, tradeEff } from './league';
 import { computeSeasonAwards, computeFinalsMVP } from './awards';
 import { rollPostGameEvent, resolveTeamEvent } from './events';
 import type { Player } from './types';
@@ -110,11 +110,24 @@ function runOffseasonFlow(l: LeagueState, tag: string, offerTest: boolean): void
       if (teamPhase(t) !== want) mism.push(`${t.abbr}(${avg.toFixed(1)})`);
     }
     ok(mism.length === 0, `${tag} 状态判定 = 首发 5 人均值阈值（异常 ${mism.length}）`);
-    const young = { age: 22, exp: 1 } as Player;
-    const vet = { age: 32, exp: 9 } as Player;
+    const young = { age: 22, exp: 1, ovr: 72, potential: 10, salary: 500 } as Player;
+    const vet = { age: 32, exp: 9, ovr: 85, potential: 6, salary: 3000 } as Player;
     ok(phasePlayerWeight(young, 'rebuild') > phasePlayerWeight(young, 'contender'), `${tag} 年轻球员在重建队更值钱`);
     ok(phasePlayerWeight(vet, 'contender') > phasePlayerWeight(vet, 'rebuild'), `${tag} 老将在争冠队更值钱`);
     ok(phasePickWeight('rebuild') > phasePickWeight('retool') && phasePickWeight('retool') > phasePickWeight('contender'), `${tag} 选秀权估值 重建 > 补强 > 争冠`);
+    // v2.5.1 回归断言：阶段偏好只作用于「未来溢价」，当下战力不打折 ——
+    //   「更强且更年轻」的球员在任何球队阶段都必须比「更弱更老」的值钱
+    //   （用户实例：争冠骑士眼中 87/24 岁莫布利曾被算成 ≈ 85/29 岁萨博尼斯）
+    const better = { age: 24, exp: 3, ovr: 87, potential: 8, salary: 3000 } as Player;
+    const worse = { age: 29, exp: 7, ovr: 85, potential: 6, salary: 3000 } as Player;
+    const phases = ['contender', 'retool', 'rebuild'] as const;
+    const badPh = phases.filter((ph) => phaseValue(better, ph) <= phaseValue(worse, ph));
+    console.log(`  ${tag} 更强更年轻者估值：${phases.map((ph) => `${phaseLabel(ph)} ${phaseValue(better, ph).toFixed(2)} vs ${phaseValue(worse, ph).toFixed(2)}`).join(' · ')}`);
+    ok(badPh.length === 0, `${tag} 更强更年轻的球员在任何阶段都更值钱（异常阶段 ${badPh.join('/')}）`);
+    // 反面：争冠队仍应"愿为即战力买单"——老将的争冠折算价值高于其重建价值，且折算系数 > 1
+    const vetHigh = { age: 33, exp: 12, ovr: 88, potential: 6, salary: 3000 } as Player;
+    ok(phaseValue(vetHigh, 'contender') > phaseValue(vetHigh, 'rebuild'), `${tag} 同为老将：争冠队估值 > 重建队估值`);
+    ok(phasePlayerWeight(vetHigh, 'contender') > 1, `${tag} 争冠队对老将给溢价（折算系数 ${phasePlayerWeight(vetHigh, 'contender')}）`);
     console.log(`  ${tag} 阶段标签：${(['contender', 'retool', 'rebuild'] as const).map((p) => phaseLabel(p)).join(' / ')}`);
   }
 
@@ -608,8 +621,12 @@ function run(): void {
     ok(pl.draftPool.length === 180, `签池 180 枚（${pl.draftPool.length}）`);
     ok(!!f1 && !!s1 && !!f3, '下一届首轮/次轮 + 最远年份首轮都存在');
     const vF1 = pickValue(pl, f1!), vS1 = pickValue(pl, s1!), vF3 = pickValue(pl, f3!);
+    const f2 = mine(1, 2), s2 = mine(2, 2), s3 = mine(2, 3);
     console.log(`  我的签估值：${pl.year + 1} 首轮 ${vF1} / ${pl.year + 1} 次轮 ${vS1} / ${pl.year + 3} 首轮 ${vF3}`);
     console.log(`  签名示例：${pickLabel(pl, f1!)} · ${pickLabel(pl, s1!)}`);
+    // v2.6.0：用户指定的"初始价值"（战绩中性时）——首轮 1.5/1.2/1.0，次轮 0.4/0.3/0.2
+    ok(vF1 === 1.5 && !!f2 && pickValue(pl, f2) === 1.2 && vF3 === 1.0, `首轮三年初始价值 1.5 / 1.2 / 1.0（${vF1} / ${f2 ? pickValue(pl, f2) : '?'} / ${vF3}）`);
+    ok(vS1 === 0.4 && !!s2 && !!s3 && pickValue(pl, s2) === 0.3 && pickValue(pl, s3) === 0.2, `次轮三年初始价值 0.4 / 0.3 / 0.2（${vS1} / ${s2 ? pickValue(pl, s2) : '?'} / ${s3 ? pickValue(pl, s3) : '?'}）`);
     ok(vS1 < vF1, '次轮签价值低于首轮签');
     ok(vF3 < vF1, '越远的年份折价（不确定性折扣）');
     // 战绩变化 → 同一枚签的价值随之变化
@@ -850,6 +867,36 @@ function run(): void {
     tl2.userTeamId = 0;
     applyTrade(tl2, 0, target.teamId, target.givePids, target.wantPids, target.givePickIdx, target.wantPickIdx);
     ok(tl2.teams[0].players.map((p) => p.id).join(',') !== beforeIds || target.givePids.length === 0, '执行建议后阵容发生变化');
+
+    // ---------- v2.6.0 反向报价搜索器（我想要谁 → 算我要付什么）----------
+    console.log('== v2.6.0 反向报价搜索器（选定对方球员 → 生成我方报价）==');
+    const rival = tl.teams.slice(1).flatMap((t) => t.players.map((p) => ({ p, t })))
+      .filter((x) => x.p.ovr >= 84 && x.p.age <= 30)
+      .sort((a, b) => b.p.ovr - a.p.ovr)[0];
+    const t1 = Date.now();
+    const tres = searchTradeTargets(tl, [rival.p.id], [], 3);
+    const tms = Date.now() - t1;
+    console.log(`  目标 ${rival.p.name}（${rival.t.abbr} · OVR ${rival.p.ovr} · ${rival.p.age}岁）→ ${tres.length} 条报价（${tms}ms）`);
+    ok(tres.length > 0, `反向搜索能给出报价方案（${tres.length} 条）`);
+    ok(tms < 2000, `反向搜索性能可接受（${tms}ms）`);
+    ok(tres.every((s) => s.wantPids.includes(rival.p.id)), '每条报价都以"我选定的球员"为回报');
+    ok(tres.every((s) => s.givePids.length + s.givePickIdx.length > 0), '每条报价都写明我要付出什么');
+    ok(tres.every((s) => s.myGiveVal > 0 && s.myGetVal > 0), '每条报价都带"我方折算"数值');
+    ok(tres.every((s, i, arr) => i === 0 || arr[i - 1].gain >= s.gain), '报价按我方净收益降序');
+    const tInvalid = tres.filter((s) => !evaluateTrade(tl, 0, s.teamId, s.givePids, s.wantPids, s.givePickIdx, s.wantPickIdx).accept);
+    ok(tInvalid.length === 0, `所有报价都通过完整规则校验（异常 ${tInvalid.length} 条）`);
+    // 锁定球员不会被当作筹码
+    {
+      const used = new Set(tres.flatMap((s) => s.givePids));
+      const lockedPid = [...used][0];
+      if (lockedPid != null) {
+        tl.lockedPids = [lockedPid];
+        const after = searchTradeTargets(tl, [rival.p.id], [], 3);
+        ok(!after.some((s) => s.givePids.includes(lockedPid)), '锁定的球员不会出现在反向报价里');
+        tl.lockedPids = [];
+      }
+    }
+    ok(searchTradeTargets(tl, [], [], 3).length === 0, '未选目标时不返回报价');
   }
 
   // ---------- v2.3.0 年龄口径 / 自由市场数组不可变 ----------
@@ -1279,6 +1326,24 @@ function runReal(): void {
   // v2.5.0：杰伦·威廉姆斯 = 分卫/小前（用户指定例外）
   const jwA = findPlayer(l, '杰伦·威廉姆斯');
   ok(jwA?.p.pos === 'SG' && jwA?.p.secPos === 'SF', `杰伦·威廉姆斯 = SG/SF（${jwA?.p.pos}/${jwA?.p.secPos}）`);
+  // v2.5.1 用户实例回归：萨博尼斯(85/29) 单换 莫布利(87/24) —— 更强且更年轻的一方必须更值钱，交易必须被拒
+  {
+    const dom = findPlayer(l, '多曼塔斯·萨博尼斯')?.p;
+    const mob = findPlayer(l, '埃文·莫布利')?.p;
+    if (dom && mob) {
+      const cle = l.teams.find((t) => t.players.some((p) => p.id === mob.id));
+      const sac = l.teams.find((t) => t.players.some((p) => p.id === dom.id));
+      if (cle && sac) {
+        const ph = teamPhase(cle);
+        const vMob = phaseValue(mob, ph), vSab = phaseValue(dom, ph);
+        const tr = evaluateTrade(l, sac.id, cle.id, [dom.id], [mob.id], [], []);
+        console.log(`  实例回归：${cle.abbr}(${phaseLabel(ph)}) 眼中 莫布利 ${vMob.toFixed(2)} vs 萨博尼斯 ${vSab.toFixed(2)} → ${tr.accept ? '成交（异常！）' : '拒绝'}`);
+        console.log(`    理由：${tr.reason.slice(0, 96)}`);
+        ok(vMob > vSab, `更强更年轻的莫布利在争冠队眼中更值钱（${vMob.toFixed(2)} > ${vSab.toFixed(2)}）`);
+        ok(!tr.accept, '萨博尼斯单换莫布利被对方拒绝（旧算法曾判"基本对等"）');
+      }
+    }
+  }
   // 旧档改名迁移：英文名 → 中文
   const clone = JSON.parse(JSON.stringify(l)) as LeagueState;
   const en1 = clone.teams[0].players.find((p) => p.name === '杰森·塔图姆') ?? clone.teams[0].players[0];

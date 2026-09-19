@@ -2,7 +2,7 @@
 
 > 用途：把本项目的**全部对话成果**压缩成一份自包含文档。新会话只需读这份文件 + 仓库源码，
 > 即可无缝接手开发，无需重看历史对话。
-> 最后更新：v2.5.0（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（私有）。
+> 最后更新：v2.6.0（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（私有）。
 
 ---
 
@@ -12,15 +12,24 @@
 |---|---|
 | 本地路径 | `C:\Users\10709\Desktop\AI\nba-manager` |
 | 技术栈 | Electron 33 + React 19 + TypeScript 5.7 + Vite 6（纯离线单机，无后端） |
-| 当前版本 | **2.5.0**（package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
-| 交付产物 | `release\NBA-Manager-2.5.0.exe`（便携版，双击即玩） |
+| 当前版本 | **2.6.0**（package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
+| 交付产物 | `release\NBA-Manager-2.6.0.exe`（便携版，双击即玩） |
 | 目标用户 | 用户的弟弟（玩英文名单的真实 NBA 模式）；玩家=一支 NBA 球队的总经理 |
 | 名单模式 | `real`（2K27 真实名单，主力玩法）/ `fictional`（虚构名单，自测基线） |
 | 存档 | `%APPDATA%\NBA经理\saves\auto.json`（Electron）或 localStorage 兜底；`SAVE_VERSION = 11` |
-| 自测 | `src/engine/selfTest.ts`（虚构 + 真实双跑，360+ 断言，全绿才发版） |
-| 本版主题 | 交易市场球队三状态（争冠/补强/重建）· 球员锁定 · 常规赛/季后赛数据分离 · 新秀名字全汉化 · 休赛期 3 天交易窗口 · 伤病跨季康复 + 合同年递减 · 去除 Stepien |
+| 自测 | `src/engine/selfTest.ts`（虚构 + 真实双跑，380+ 断言，全绿才发版） |
+| 本版主题 | **反向报价搜索器（我想要谁 → 算我要付什么）** · **选秀权初始价值 1.5/1.2/1.0 + 0.4/0.3/0.2** · 交易估值拆「当下战力 / 未来溢价」 · 球员锁定 · 三状态 · 季后赛数据分离 |
 
-**本版（v2.5.0）各档案章节更新要点**
+**本版（v2.6.0/v2.5.1）各档案章节更新要点**
+
+| 档案章节 | 更新要点 |
+|---|---|
+| §3 需求演化史 | 新增 v2.5.1（估值失衡修正）与 v2.6.0（反向报价 + 签值口径）行 |
+| §5.7 交易 | **`tradeEff` 拆 now/future**、`phaseValue` 阶段折算、**`searchTradeTargets` 反向报价**、`pickValue` 新基础值表 |
+| §7 源码地图 | `league.ts` 新增 `tradeEff/phaseValue/phaseFutureWeight/searchTradeTargets/TargetSuggestion` |
+| §10 经验 | "偏好权重只能乘在可争议的那一段上""估值口径必须与决策口径一致" |
+
+**上一版（v2.5.0）各档案章节更新要点**
 
 | 档案章节 | 更新要点 |
 |---|---|
@@ -30,10 +39,10 @@
 | §5.3 赛季/季后赛 | 常规赛 `gp ≤ 82`（跨队容差）、季后赛独立统计、新秀阵门槛 20 且每阵必 5 人 |
 | §5.5 选秀 | `LotteryResult.lotteryIds` + "原属/现属"展示、新秀名字全汉化、休赛期 3 天交易窗口 |
 | §5.6 自由市场 | UI 位置筛选（全部 + 五位置） |
-| §5.7 交易 | **球队三状态加权**（>85/80-85/<80）、`l.lockedPids` 锁定、**Stepien 移除** |
+| §5.7 交易 | 球队三状态加权（>85/80-85/<80）、`l.lockedPids` 锁定、**Stepien 移除** |
 | §6 存档 | `SAVE_VERSION = 11`：`Player.poGp/poStats`、`LeagueState.lottery/lockedPids/offseasonTradeDays` |
 | §7/§8 地图 | 行数刷新；`TradeView`（锁定 + 状态徽章）、`LeagueView`（数据榜双季）、`OffseasonView`（休赛期交易窗口）、`FreeMarketView`（位置筛选） |
-| §9 验证链 | ui-smoke 增补 v2.5.0 检查（总计行 / 位置筛选 / 锁定 / 搜索器 / 双季数据榜 / 乐透归属 / 休赛期交易窗口） |
+| §9 验证链 | ui-smoke 增补检查（总计行 / 位置筛选 / 锁定 / 搜索器 / 双季数据榜 / 乐透归属 / 休赛期交易窗口） |
 | §10 经验 | 新增"过时断言要跟着决策一起改""个人 gp 跨队可超 82""lottery.order 是 30 队"等 |
 | §11 遗留 | 更新 ui-smoke 覆盖清单 |
 
@@ -105,7 +114,12 @@ node tools/ui-smoke.mjs 9333
 
 | **v2.5.0** | 弟弟 16 条：①交易市场按球队三状态（首发 5 人均值 >85 争冠 / 80-85 补强 / <80 重建）定价 ②交易搜索器里（含我方）球员显示能力值与位置 ③去掉交易页"双方总估值" ④去除 Stepien 规则 ⑤自由市场加五位置筛选 ⑥数据榜实时 + 常规赛/季后赛分开、阵容页打完常规赛改记季后赛 ⑦杰伦·威廉姆斯 = 分卫/小前 ⑧交易市场加锁定（锁定球员不被 AI 报价）⑨战报加"总计"行 ⑩乐透抽签后三天可交易 ⑪乐透结果显示原属/现属球队 ⑫杨瀚森 2005 年生 ⑬新秀二阵少一人 ⑭新秀名字全部汉化 ⑮伤病次季自动康复 ⑯合同年随赛季递减 | `teamPhase/phaseLabel/phasePlayerWeight/phasePickWeight`（`league.ts`）；`evaluateTrade` 按阶段加权、Stepien 检查删除；`l.lockedPids` 在 `tryAITradeOfferToUser` 中跳过；`Player.poGp/poStats` + `simulateGame(...,'playoff')` + `leaders(...,poMode)`；`LotteryResult.lotteryIds` + `.lo-owner`"原属→现属"；`l.offseasonTradeDays = 3`（休赛期交易窗口，`OffseasonView` 内嵌 `TradeView`）；`offSeasonBookkeeping`（伤病清空 + 合同年 -1）；`enNameToZh` 让美国新秀也显示中文译名；`POS_OVERRIDE`/`AGE_OVERRIDE`（JW SG/SF、杨瀚森 21 岁）；新秀一二阵 `takeRk` 兜底必 5 人；`SAVE_VERSION=11` |
 
+| **v2.5.1** | 用户看图反馈：搜索器给出的「萨博尼斯（85 · 29岁）单换莫布利（87 · 24岁）」被判"基本对等（争冠中：愿为即战力买单）"，估值 2.0 ↔ 3.3 —— 更强且更年轻的一方反而等价 | 根因 = 阶段权重乘在**整体价值**上（争冠 ×0.75 把莫布利 3.3→2.5、老将 ×1.2 把萨博尼斯 2.0→2.4）。修法：`tradeEff(p)` 把等效能力拆成 `{now, future}`，`phaseValue` 只对未来溢价加权（争冠 0.6 / 补强 0.9 / 重建 1.35），当下战力（ovr + 合同 + 球星稀缺）永不打折；`phasePlayerWeight` 改为折算系数（展示口径）；搜索器 `gain` 改用我方阶段折算；交易页同时显示市场估值与双方折算估值。同一案例现在 2.87 vs 2.00 → 拒绝（selfTest 加了合成球员 + 真实球员双回归断言） |
+
+| **v2.6.0** | ①交易搜索器加「选定对方球员 → 给我发报价」的反向搜索 ②未来三年首轮签初始价值 1.5 / 1.2 / 1，次轮 0.4 / 0.3 / 0.2 | 引擎 `searchTradeTargets(l, wantPids, wantPickIdx)`（目标按现属球队分组 → 价值剪枝 → 单人/单人+签/两人/两人+签四类组合 → 全部经 `evaluateTrade` 校验 → 按**我方阶段折算净收益**排序），返回 `TargetSuggestion extends TradeSuggestion {myGiveVal,myGetVal}`；`pickValue` 改为 `PICK_BASE = {1:[1.5,1.2,1.0], 2:[0.4,0.3,0.2]}` × 战绩质量系数（首轮 0.6-1.4、次轮 0.8-1.2，中性=1.0）；UI 搜索器加模式切换 + 「🎯 生成报价方案」+「📨 发送报价」（目标在右栏勾选，可跨队） |
+
 **迭代工作方式（继续保持）**：用户（转述弟弟反馈）给需求 → 直接实现 → 全量验证链 → 打包 exe → 更新 Changelog/使用说明 → 交付产物路径 + 变更说明；涉及行为改动时在 `使用说明.txt` 顶部加版本段。
+⚠️ v2.6.0 起用户要求"**每次测试时间太长，只测试改的功能**"：优先跑 `tsc` + 针对本次改动的定向脚本（`tools/temp-*.ts|mjs`，用完删除），全量 selfTest / ui-smoke 只在发版前或改动涉及全局数值时再跑。
 
 ---
 
@@ -294,23 +308,42 @@ v2.5.0 UI 位置筛选：`.fa-filter`（全部 + PG/SG/SF/PF/C，带人数统计
        （④ 既做"当前筹码换不动"的兜底，也做"再加一点换更好的"升级 → 标 needsMore）
   候选裁剪：对方球员价值 ∈ [0.45×gv, 1.9×gv] 取前 8、签取前 4；pickValue 结果预计算（否则循环里上千次排序）
   每队最多返回 maxPerTeam 条普通方案 + 1 条"需追加"升级方案；全部经 evaluateTrade 完整校验
-  实测性能：4-11ms / 次（29 队全扫），单次返回 70-105 条建议
+  实测性能：4-11ms / 次（29 队全扫），单次返回 60-105 条建议
   返回结构 TradeSuggestion{ teamId, givePids, givePickIdx, wantPids, wantPickIdx, reason, gain, needsMore, note }
 
+【反向报价搜索器 v2.6.0】searchTradeTargets(l, wantPids, wantPickIdx, maxPerTeam=3) → TargetSuggestion[]
+  方向相反：入参 = 玩家**想要**的对方球员/签（可跨队多选），输出 = 各队愿意接受的"我方筹码组合"
+  目标按现属球队分组（球员看所在队、选秀权看 pk.o）→ 对每队：
+    对方要价 wantVal（用**对方阶段**折算）→ 我方候选筹码按 [0.4, 2.6]×wantVal 剪枝取前 10 人 / 前 4 签
+    （被 `l.lockedPids` 锁定的球员直接排除）→ 枚举四类组合：单人 / 单人+1 签 / 两人 / 两人+1 签
+    → 全部经 evaluateTrade 校验 → 按**我方阶段折算净收益** gain 降序，每队最多 maxPerTeam 条
+  返回 TargetSuggestion extends TradeSuggestion { myGiveVal, myGetVal }
+  UI：搜索器模式切换「① 我出筹码 → 各队给什么」「② 我想要谁 → 算我要付什么」，
+      模式②在右栏勾选目标 → 「🎯 生成报价方案」→ 每条报价可「填入筹码」或「📨 发送报价」直接成交
+  实测性能：单目标 0-2ms；4 个真实球星目标均能给出 1-3 条可行报价
+
 tradeValue = max(0.1, round(2^((eff-75)/10), 2))（75 基线、每 +10 翻倍）
-  eff = ovr
-      + (≤25 岁且潜力高) (potential-5)*3 * 0.55 * clamp(1+(25-age)*0.08, 0.6, 1.6)
-      − (age ≥ 31) (age-30)*0.8
-      ± 合同：salary > fair*1.15 → −1.5；salary < fair*0.9 → +1
-      + ovr ≥ 90 → +1
-pickValue：第 1 赛季（history 空）恒为 1（盲盒签）；否则按 f 队战绩排名 r 换算期望能力再入曲线
-【球队三状态 v2.5.0】`teamPhase(t)` = 队内最强 5 人平均 OVR：> 85 = contender 争冠 / ≥ 80 = retool 补强 / else 重建
-  phasePlayerWeight(p, phase)：年轻（age ≤ 25 或 exp ≤ 3）= 未来资产 → 争冠 0.75 / 补强 0.92 / 重建 1.28；
-                               老将（age ≥ 29）= 即时战力 → 1.2 / 1.05 / 0.8；其余 1
-  phasePickWeight(phase)：选秀权 → 争冠 0.7 / 补强 0.9 / 重建 1.35
-  evaluateTrade 用加权后的 aiGiveVal / aiGetVal 判定，容忍度 tol = 0.06 × aiGiveVal，
-  拒绝理由里带"争冠中/补强中/重建中"的定位说明（旧版按胜率的 mood 已删除）
-  UI：交易页双方各一个 `.chip.phase-*`、搜索结果行 `.sr-phase`
+  v2.5.1：等效能力拆成两段（`tradeEff(p)`）
+    now    = ovr ± 合同（溢价 −1.5 / 廉价 +1）+ (ovr ≥ 90 ? +1 : 0)      ← 当下战力，任何阶段都不打折
+    future = 潜力溢价（≤25 岁：(potEff−ovr)×0.55×clamp(1+(25-age)×0.08, 0.6, 1.6)，
+             或 ≤25 岁无潜力空间 +0.5）− 年龄折损（≥31 岁：(age−30)×0.8）
+    tradeValue = value(now + future)；phaseValue(p, phase) = value(now + future × 阶段系数)
+  ⚠️ 历史坑（v2.5.0→v2.5.1）：早期把阶段系数乘在**整体价值**上，争冠 ×0.75 会把
+     「87/24 岁」算成 2.5、把「85/29 岁」×1.2 算成 2.4 → 更强更年轻的球员反而等价甚至更便宜。
+     凡是"偏好/风格类权重"，都必须只作用在**可争议的那一部分**（这里是未来溢价）上。
+pickValue：v2.6.0 起 = `PICK_BASE[round][距今届数]` × 战绩质量系数
+  PICK_BASE = { 1: [1.5, 1.2, 1.0], 2: [0.4, 0.3, 0.2] }（用户指定：未来三年首轮 1.5/1.2/1、次轮 0.4/0.3/0.2）
+  质量系数：按 `pick.f`（**原属球队**）当季战绩排名 → q ∈ [0,1]（1 = 联盟最差）→
+            首轮 0.6 + q×0.8（0.6-1.4）、次轮 0.8 + q×0.4（0.8-1.2）；战绩样本 < 8 场按中性 1.0
+  → 开档（0-0）恰好等于用户给的初始价值；实测：摆烂队首轮 2.1 / 中游 1.5 / 强队 0.9
+  ⚠️ 旧口径（v2.3-v2.5）= 期望能力曲线 ×0.88^off，开档首轮仅 0.93、摆烂队 1.87、强队 0.44；已废弃
+【球队三状态 v2.5.0/v2.5.1】`teamPhase(t)` = 队内最强 5 人平均 OVR：> 85 = contender 争冠 / ≥ 80 = retool 补强 / else 重建
+  `phaseFutureWeight(phase)`：争冠 0.6 / 补强 0.9 / 重建 1.35（作用于 future 段）
+  `phasePickWeight(phase)`：选秀权 0.7 / 0.9 / 1.35（选秀权 100% 是未来资产）
+  `phasePlayerWeight(p, phase)` = phaseValue / tradeValue（仅作 UI 展示的"折算系数"）
+  evaluateTrade 用 phaseValue 汇总，容忍度 tol = 0.06 × aiGiveVal，
+  再按阶段给 ±0.04~0.10 的情境加成（争冠"愿为即战力买单" +0.04、重建收年轻资产 +0.10 等）；
+  理由文本同时给出「原始估值」与「折算后 你给 X / 他给 Y，差 Z」
 【锁定 v2.5.0】`l.lockedPids`（跨赛季保留）：`tryAITradeOfferToUser` 里 `locked.has(p.id)` 直接跳过；
   UI 上只有自家球员行有 `.lock-btn`（🔓/🔒），点击切换；`.pick-row.locked` 高亮
 【Stepien 移除 v2.5.0】`stepienViolation` 已删除；`evaluateTrade` 不再有"连续两年无首轮签"检查
@@ -373,7 +406,7 @@ faDay/faOffers/poffExitShown/pendingEvents/draft → **v2.5.0：`poGp/poStats` �
 | `src/engine/realRoster.ts` (1251) | AUTO-GENERATED：`REAL_ROSTER`（30 队 449 人）、`REAL_FA`（115）、`ZH_NAME_MAP`；球员含 `p/q`（主/副位置）、`wt/ws`（体重/臂展） |
 | `src/engine/gen.ts` (956) | `genPlayer`/`genTeamRoster`/`genRookie`/`genDraftClass`/`genFreeAgent`/`realFaPlayer`、`createLeague`/`createRealLeague`/`finishLeague`、`makeSchedule`、`calcOvr/calcLin/genSkills/attrsFromSkills/deriveSkills/fromRealSkills`、`salaryFor`、`potentialToStar`/`POS_SEC`、`heightLabel/weightLabel/wingspanLabel/lbsLabel/feetLabel`、`weightFor/wingspanFor/ensureMeasure`、**`freshStatLine`（常规+季后赛两套）**/`resetSeasonStats`、`freshPickPool/rollPickPool/PICK_YEARS`、`makeNextDraftClass`、`repositionPlayer`、`assignTags`、`TEAM_STYLES`/`COACH_STYLES`/`applyTeamStyle`/`applyCoachStyle` |
 | `src/engine/sim.ts` (716) | `simulateGame(away,home,rng,accumulate=true \| 'playoff',injurySeed?,mods?)`、`possession`/`reboundAfterMiss`、`coreBoost`（队内战术地位）、`depthList`（位置深度借人，**替补优先**）、`teamEffMods`/`bondMods`、轮换 `rotationPlan/manualRotation/targetMinutes/sideLineup/AUTO_MINUTES`、伤病 `injuryRisk/pregameInjury` |
-| `src/engine/league.ts` (1276) | `simDay`、`standings`/`leaders(stat,minGp,playoff)`/`perGame`、季后赛 `runPlayoffRound/simPlayoffGame/playoffDone/playoffChampion/refreshPlayoffPlaceholders`、`playerScore`、`migrateSave`、`sortRoster`、`tradeValue/pickValue/pickLabel/evaluateTrade/applyTrade/teamStrength`、**`teamPhase/phaseLabel/phasePlayerWeight/phasePickWeight`**、`lotteryDraw/lotteryOrder`/`rookieScaleSalary`、`searchTrades`、`tryAITradeOfferToUser`（跳过 `lockedPids`）/`acceptTradeOffer`/`rejectTradeOffer`、劳资常量、`payrollOf`、`tryAISeasonTrade`、`nextGameOf/playedCount` |
+| `src/engine/league.ts` (1301) | `simDay`、`standings`/`leaders(stat,minGp,playoff)`/`perGame`、季后赛 `runPlayoffRound/simPlayoffGame/playoffDone/playoffChampion/refreshPlayoffPlaceholders`、`playerScore`、`migrateSave`、`sortRoster`、**`tradeEff`（now/future 拆分）**、`tradeValue/pickValue/pickLabel/evaluateTrade/applyTrade/teamStrength`、**`teamPhase/phaseLabel/phaseValue/phaseFutureWeight/phasePlayerWeight/phasePickWeight`**、`lotteryDraw/lotteryOrder`/`rookieScaleSalary`、`searchTrades`、`tryAITradeOfferToUser`（跳过 `lockedPids`）/`acceptTradeOffer`/`rejectTradeOffer`、劳资常量、`payrollOf`、`tryAISeasonTrade`、`nextGameOf/playedCount` |
 | `src/engine/offseason.ts` (877) | `timeCoefOf/growthPointsFor/agingPenaltyOf/recalcOvr/spendPoint/autoDistribute`、`agePlayer`、**`offSeasonBookkeeping`（伤病清空 + 合同年 -1）**、`beginOffseason`（乐透抽签 + 建选秀 + 下一届新秀 + **3 天交易窗口**）、`settleFreeAgency/signFreeAgentNow/cutPlayer`、`simulateOffseasonAI/simulateAIOffseasonTrades`、`finishOffseason`（清窗口）、选秀 `draftIsUserTurn/draftRemaining/draftPickAuto/draftPickUser/draftFastToUserPick/draftComplete/assignRookie`、`askFor/canSign`、`MIN_SALARY/MID_LEVEL` |
 | `src/engine/awards.ts` (189) | `computeSeasonAwards`（幂等，常规奖；All-Rookie/All-Defense 每阵必 5 人）、`computeFinalsMVP`（独立 FMVP）、`lineScore` |
 | `src/engine/events.ts` (109) | `rollPostGameEvent`（含带选项事件）、`resolveTeamEvent`（多效果）、`CHEM_OPTS`/`BRAND_OPTS` 权衡型选项 |
@@ -532,6 +565,17 @@ faDay/faOffers/poffExitShown/pendingEvents/draft → **v2.5.0：`poGp/poStats` �
 18. **休赛期账面处理集中在一个函数里（v2.5.0）**：`offSeasonBookkeeping(p)` = 伤病清空 + 合同年 -1，
     在 `beginOffseason` 里对**球队球员与自由球员**各跑一遍。此前这两件事**完全没做**，
     表现就是"上赛季的伤带到下赛季""合同年永远不变"。新增任何"每季一次"的账面字段都往这里加。
+19. **偏好/风格类权重只能乘在"可争议的那一段"上（v2.5.1 用户实例）**：
+    用户截图指出「萨博尼斯 85/29 岁 单换 莫布利 87/24 岁」被判基本对等——因为 v2.5.0 把
+    球队阶段系数乘在**球员整体价值**上（争冠 ×0.75 / 老将 ×1.2），于是"更强 + 更年轻"的
+    莫布利被算成 2.5、"更弱 + 更老"的萨博尼斯被算成 2.4。修法：`tradeEff` 拆出
+    `now`（当下战力）与 `future`（潜力 − 年龄折损），阶段系数只作用于 `future`。
+    **通用教训**：任何"按偏好/风格/阶段加权"的价值模型，先问"这个偏好到底该影响哪一段"，
+    整值乘法几乎一定会造出反直觉结论。回归断言用一句可判定的公理表达：
+    **更强的同时更年轻的球员，在任何阶段都必须更值钱**。
+20. **估值口径必须和决策口径一致（v2.5.1）**：搜索器原先用市场价算"你赚/你亏"，
+    但成交判定用折算价 → 会出现"显示你亏 1.3，却提示可以成交"。现在两侧都用同一套
+    `phaseValue`（搜索器用**我方**阶段、判定用**对方**阶段），并在理由里同时给出两种数值。
 
 ---
 

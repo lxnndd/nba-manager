@@ -959,6 +959,8 @@ tr.clickable:hover td { background: rgba(255,166,60,.07); }
 .sr-gain.good { color: #4ade80; }
 .sr-gain.bad { color: #ff8a8a; }
 .sr-body { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 12.5px; flex-wrap: wrap; }
+/* v2.6.0：反向报价的"我方折算净值"行 */
+.sr-vals { font-size: 11px; margin: -2px 0 4px; }
 .sr-out { color: #ff9d9d; }
 .sr-in { color: #7ee2a8; }
 .sr-arrow { color: var(--accent-2); }

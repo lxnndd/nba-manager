@@ -5,9 +5,9 @@ import { useMemo, useState } from 'react';
 import type { DraftPick, LeagueState, Player, Team } from '../engine/types';
 import {
   evaluateTrade, applyTrade, tradeValue, pickValue, pickLabel, teamStrength,
-  payrollOf, SALARY_CAP, TAX_LINE, HARD_CAP, TRADE_DEADLINE_DAY, searchTrades,
-  teamPhase, phaseLabel,
-  type TradeSuggestion,
+  payrollOf, SALARY_CAP, TAX_LINE, HARD_CAP, TRADE_DEADLINE_DAY, searchTrades, searchTradeTargets,
+  teamPhase, phaseLabel, phaseValue, phasePickWeight,
+  type TradeSuggestion, type TargetSuggestion,
 } from '../engine/league';
 import { POS_CN, money, perGameLine, ovrClass } from './format';
 import { TeamLogo } from './TeamLogo';
@@ -35,6 +35,9 @@ export function TradeView({ api }: { api: GameApi }) {
   const [searching, setSearching] = useState(false);
   const [searchMsg, setSearchMsg] = useState<string | null>(null);
   const [showAllResults, setShowAllResults] = useState(false);
+  // v2.6.0：搜索器两种模式 —— give = 我出筹码看各队给什么；want = 我想要谁、算我要付什么
+  const [searchMode, setSearchMode] = useState<'give' | 'want'>('give');
+  const [targetResults, setTargetResults] = useState<TargetSuggestion[] | null>(null);
 
   const toggle = (arr: number[], id: number): number[] =>
     arr.includes(id) ? arr.filter((x) => x !== id) : arr.length >= 5 ? arr : [...arr, id];
@@ -53,7 +56,13 @@ export function TradeView({ api }: { api: GameApi }) {
     if ((!giveIds.length && !givePicks.length) || (!wantIds.length && !wantPicks.length) || !target) return null;
     const gv = myGive.reduce((s, p) => s + tradeValue(p), 0) + givePicks.reduce((s, i) => s + pickValue(l, l.draftPool[i]), 0);
     const wv = theirGive.reduce((s, p) => s + tradeValue(p), 0) + wantPicks.reduce((s, i) => s + pickValue(l, l.draftPool[i]), 0);
-    return { gv, wv };
+    // v2.5.1：同时给出「按我方/对方球队阶段折算后」的价值（决策用的就是折算值）
+    const myPh = teamPhase(me), theirPh = teamPhase(target);
+    const myPhaseVal = myGive.reduce((s, p) => s + phaseValue(p, myPh), 0)
+      + givePicks.reduce((s, i) => s + pickValue(l, l.draftPool[i]) * phasePickWeight(myPh), 0);
+    const theirPhaseVal = theirGive.reduce((s, p) => s + phaseValue(p, theirPh), 0)
+      + wantPicks.reduce((s, i) => s + pickValue(l, l.draftPool[i]) * phasePickWeight(theirPh), 0);
+    return { gv, wv, myPhaseVal, theirPhaseVal };
   }, [giveIds, givePicks, wantIds, wantPicks, target, me, l, myGive, theirGive]);
 
   // 阵容战力（交易前后对比）
@@ -129,12 +138,90 @@ export function TradeView({ api }: { api: GameApi }) {
   // 直接成交（evaluateTrade 已验证过，且再次确认）
   const executeSuggestion = (s: TradeSuggestion) => {
     const v = evaluateTrade(l, me.id, s.teamId, s.givePids, s.wantPids, s.givePickIdx, s.wantPickIdx);
-    if (!v.accept) { setSearchMsg(`该方案已不可行：${v.reason}`); setSearchResults(null); return; }
+    if (!v.accept) { setSearchMsg(`该方案已不可行：${v.reason}`); setSearchResults(null); setTargetResults(null); return; }
     applyTrade(l, me.id, s.teamId, s.givePids, s.wantPids, s.givePickIdx, s.wantPickIdx);
     setSearchResults(null);
+    setTargetResults(null);
     setSearchMsg(`✅ 交易完成：${s.note}`);
     setGiveIds([]); setWantIds([]); setGivePicks([]); setWantPicks([]);
     api.tick();
+  };
+
+  // v2.6.0 反向报价搜索：选定"我想要的对方球员/签" → 算出我需要付什么
+  const runTargetSearch = () => {
+    if (searching) return;
+    if (!wantIds.length && !wantPicks.length) {
+      setSearchMsg('先在右侧「我要的」里点选你想要的球员或选秀权（可多选），再点「生成报价方案」。');
+      return;
+    }
+    setSearching(true);
+    setSearchMsg(null);
+    setTimeout(() => {
+      try {
+        const res = searchTradeTargets(l, wantIds, wantPicks, 3);
+        setTargetResults(res);
+        setShowAllResults(false);
+        setSearchMsg(res.length
+          ? `对方愿意接受 ${res.length} 种报价（${new Set(res.map((r) => r.teamId)).size} 支球队）——可直接「📨 发送报价」成交`
+          : '对方不愿意放人：他可能是非卖品（核心/招牌球员），或你的筹码与他的身价不匹配——试试加一枚首轮签，或换成更值钱的球员。');
+      } catch (e) {
+        setSearchMsg(`搜索失败：${e instanceof Error ? e.message : String(e)}`);
+      } finally {
+        setSearching(false);
+      }
+    }, 10);
+  };
+
+  // v2.6.0：搜索结果行（正向/反向搜索共用同一套渲染）
+  const suggestionRow = (s: TradeSuggestion, i: number) => {
+    const t = l.teams[s.teamId];
+    // v2.5.0：搜索器里的球员都要显示位置与能力值（我方也显示）
+    const pDesc = (team: Team, pid: number) => {
+      const p = team.players.find((q) => q.id === pid);
+      return p ? `${p.name}（${p.pos}/${p.secPos} · OVR ${p.ovr} · ${p.age}岁）` : '?';
+    };
+    const outNames = [
+      ...s.givePids.map((pid) => pDesc(me, pid)),
+      ...s.givePickIdx.map((idx) => pickLabel(l, l.draftPool[idx])),
+    ];
+    const inNames = [
+      ...s.wantPids.map((pid) => pDesc(t, pid)),
+      ...s.wantPickIdx.map((idx) => pickLabel(l, l.draftPool[idx])),
+    ];
+    const tv = s as Partial<TargetSuggestion>;
+    return (
+      <div className={`search-row ${s.needsMore ? 'needs-more' : ''}`} key={`${s.teamId}-${i}`}>
+        <div className="sr-head">
+          <TeamLogo abbr={t.abbr} size="xs" />
+          <b>{t.city} {t.name}</b>
+          <span className="dim">{t.win}-{t.loss}</span>
+          <span className={`chip phase-${teamPhase(t)} sr-phase`}>{phaseLabel(teamPhase(t))}</span>
+          {s.needsMore && <span className="sr-tag">需追加筹码</span>}
+          <span className={`sr-gain ${s.gain >= 0 ? 'good' : 'bad'}`}>
+            {s.gain >= 0 ? `你赚 ${s.gain.toFixed(1)}` : `你亏 ${(-s.gain).toFixed(1)}`}
+          </span>
+        </div>
+        <div className="sr-body">
+          <span className="sr-out">送出 {outNames.join('、')}</span>
+          <span className="sr-arrow">⇄</span>
+          <span className="sr-in">得到 {inNames.join('、')}</span>
+        </div>
+        {tv.myGiveVal != null && tv.myGetVal != null && (
+          <div className="sr-vals dim">
+            我方折算：付出 {tv.myGiveVal.toFixed(1)} ↔ 得到 {tv.myGetVal.toFixed(1)}（净值 {s.gain >= 0 ? '+' : ''}{s.gain.toFixed(1)}）
+          </div>
+        )}
+        <div className="sr-foot">
+          <span className="dim">{s.reason}</span>
+          <div className="btn-row">
+            <button className="btn sm" onClick={() => applySuggestion(s)}>填入筹码</button>
+            <button className="btn primary sm" onClick={() => executeSuggestion(s)}>
+              {searchMode === 'want' ? '📨 发送报价' : '✓ 直接成交'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   if (!target) return null;
@@ -163,10 +250,10 @@ export function TradeView({ api }: { api: GameApi }) {
   const targetPhase = teamPhase(target);
   const myPhase = teamPhase(me);
   const phaseHint = targetPhase === 'contender'
-    ? '争冠队：看重即时战力，愿意付出选秀权与年轻球员换即战力（未来资产打 7 折、老将溢价 1.2 倍）'
+    ? '争冠队：看重当下战力，只把球员的"未来溢价"（潜力/年龄）算 6 折——愿意用选秀权和潜力股换即战力；当下更弱的球员不会因为年轻就被高估'
     : targetPhase === 'retool'
-      ? '补强队：较为看重即时战力（选秀权 9 折、老将 1.05 倍）'
-      : '重建队：非常重视未来资产——选秀权与年轻球员溢价 1.35 倍、老将打 8 折';
+      ? '补强队：较为看重即时战力（未来溢价 9 折、选秀权 9 折）'
+      : '重建队：非常重视未来资产——未来溢价与选秀权都按 1.35 倍算，老将的年龄折损按 1.35 倍放大（更不值钱）';
   const payState =
     pay > HARD_CAP ? '⚠️ 超过 2 亿硬顶（规则上不可能）'
       : pay > TAX_LINE ? `超奢侈税线 ${money(pay - TAX_LINE)} · apron 限制生效`
@@ -312,7 +399,12 @@ export function TradeView({ api }: { api: GameApi }) {
             <span>
               送出 <b>{[...myGive.map((p) => p.name), ...givePicks.map((i) => pickLabel(l, l.draftPool[i]))].join('、') || '…'}</b>
               换取 <b>{[...theirGive.map((p) => p.name), ...wantPicks.map((i) => pickLabel(l, l.draftPool[i]))].join('、') || '…'}</b>
-              {valuation && <>（估值 {valuation.gv.toFixed(1)} ↔ {valuation.wv.toFixed(1)}）</>}
+              {valuation && (
+                <>
+                  （市场估值 {valuation.gv.toFixed(1)} ↔ {valuation.wv.toFixed(1)}
+                  ；我方折算 {valuation.myPhaseVal.toFixed(1)} ↔ 对方折算 {valuation.theirPhaseVal.toFixed(1)}）
+                </>
+              )}
             </span>
           )}
         </div>
@@ -332,79 +424,71 @@ export function TradeView({ api }: { api: GameApi }) {
         )}
       </div>
 
-      {/* ===== v2.3.0 交易搜索器：勾选自己的筹码 → 搜出全联盟愿意接受的组合 ===== */}
+      {/* ===== v2.3.0 交易搜索器（v2.6.0 加反向报价：想要谁 → 算我要付什么）===== */}
       <div className="action-card trade-search">
-        <div className="action-title">🔍 交易搜索器（选择你愿意送出的筹码 → 看看各队愿意给什么）</div>
-        <div className="mini-lines" style={{ marginBottom: 8 }}>
-          勾选自己队里 1 名或多名球员 / 选秀权（可多选，AI 常常想要打包），点搜索即可列出
-          全联盟可行的交易组合；标「需追加」的方案 = 对方还想多要你几个人，一键即可填入筹码或直接成交。
-        </div>
-        <div className="btn-row">
-          <button className="btn primary" disabled={searching} onClick={runSearch}>
-            {searching ? '⏳ 搜索中…' : '🔍 搜索可行交易'}
+        <div className="action-title">🔍 交易搜索器</div>
+        <div className="tabs small" style={{ marginBottom: 8 }}>
+          <button className={`tab ${searchMode === 'give' ? 'on' : ''}`}
+            onClick={() => { setSearchMode('give'); setSearchMsg(null); }}>
+            ① 我出筹码 → 各队给什么
           </button>
-          <span className="dim">当前筹码：{giveIds.length} 名球员 + {givePicks.length} 枚签</span>
-          {searchResults && <button className="btn sm" onClick={() => setSearchResults(null)}>清空结果</button>}
+          <button className={`tab ${searchMode === 'want' ? 'on' : ''}`}
+            onClick={() => { setSearchMode('want'); setSearchMsg(null); }}>
+            ② 我想要谁 → 算我要付什么（发送报价）
+          </button>
         </div>
-        {searchMsg && <div className={`verdict ${searchResults?.length ? 'ok' : 'no'}`}>{searchMsg}</div>}
-        {searchResults && searchResults.length > 0 && (() => {
+        {searchMode === 'give' ? (
+          <>
+            <div className="mini-lines" style={{ marginBottom: 8 }}>
+              勾选自己队里 1 名或多名球员 / 选秀权（可多选，AI 常常想要打包），点搜索即可列出
+              全联盟可行的交易组合；标「需追加」的方案 = 对方还想多要你几个人，一键即可填入筹码或直接成交。
+            </div>
+            <div className="btn-row">
+              <button className="btn primary" disabled={searching} onClick={runSearch}>
+                {searching ? '⏳ 搜索中…' : '🔍 搜索可行交易'}
+              </button>
+              <span className="dim">当前筹码：{giveIds.length} 名球员 + {givePicks.length} 枚签</span>
+              {searchResults && <button className="btn sm" onClick={() => setSearchResults(null)}>清空结果</button>}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="mini-lines" style={{ marginBottom: 8 }}>
+              先在右侧「<b>我要的</b>」里点选你想要的球员或选秀权（可多选、可跨队），系统会反推
+              <b>各队愿意接受的报价</b>（你需要送出哪些球员/签），点「📨 发送报价」即成交。
+              想换核心球员却搜不到方案？多半是他是非卖品，或你的筹码身价不够（试试加首轮签）。
+            </div>
+            <div className="btn-row">
+              <button className="btn primary" disabled={searching} onClick={runTargetSearch}>
+                {searching ? '⏳ 计算中…' : '🎯 生成报价方案'}
+              </button>
+              <span className="dim">目标：{wantIds.length} 名球员 + {wantPicks.length} 枚签</span>
+              {targetResults && <button className="btn sm" onClick={() => setTargetResults(null)}>清空结果</button>}
+            </div>
+          </>
+        )}
+        {searchMsg && (
+          <div className={`verdict ${(searchMode === 'give' ? searchResults?.length : targetResults?.length) ? 'ok' : 'no'}`}>
+            {searchMsg}
+          </div>
+        )}
+        {/* 模式 ①：按「当前筹码即可成交 / 需追加筹码」分组 */}
+        {searchMode === 'give' && searchResults && searchResults.length > 0 && (() => {
           const direct = searchResults.filter((s) => !s.needsMore);
           const upgrade = searchResults.filter((s) => s.needsMore);
           const cap = (arr: TradeSuggestion[]) => (showAllResults ? arr : arr.slice(0, 10));
-          const row = (s: TradeSuggestion, i: number) => {
-            const t = l.teams[s.teamId];
-            // v2.5.0：搜索器里的球员都要显示位置与能力值（我方也显示）
-            const pDesc = (team: Team, pid: number) => {
-              const p = team.players.find((q) => q.id === pid);
-              return p ? `${p.name}（${p.pos}/${p.secPos} · OVR ${p.ovr} · ${p.age}岁）` : '?';
-            };
-            const outNames = [
-              ...s.givePids.map((pid) => pDesc(me, pid)),
-              ...s.givePickIdx.map((idx) => pickLabel(l, l.draftPool[idx])),
-            ];
-            const inNames = [
-              ...s.wantPids.map((pid) => pDesc(t, pid)),
-              ...s.wantPickIdx.map((idx) => pickLabel(l, l.draftPool[idx])),
-            ];
-            return (
-              <div className={`search-row ${s.needsMore ? 'needs-more' : ''}`} key={`${s.teamId}-${i}`}>
-                <div className="sr-head">
-                  <TeamLogo abbr={t.abbr} size="xs" />
-                  <b>{t.city} {t.name}</b>
-                  <span className="dim">{t.win}-{t.loss}</span>
-                  <span className={`chip phase-${teamPhase(t)} sr-phase`}>{phaseLabel(teamPhase(t))}</span>
-                  {s.needsMore && <span className="sr-tag">需追加筹码</span>}
-                  <span className={`sr-gain ${s.gain >= 0 ? 'good' : 'bad'}`}>
-                    {s.gain >= 0 ? `你赚 ${s.gain.toFixed(1)}` : `你亏 ${(-s.gain).toFixed(1)}`}
-                  </span>
-                </div>
-                <div className="sr-body">
-                  <span className="sr-out">送出 {outNames.join('、')}</span>
-                  <span className="sr-arrow">⇄</span>
-                  <span className="sr-in">得到 {inNames.join('、')}</span>
-                </div>
-                <div className="sr-foot">
-                  <span className="dim">{s.reason}</span>
-                  <div className="btn-row">
-                    <button className="btn sm" onClick={() => applySuggestion(s)}>填入筹码</button>
-                    <button className="btn primary sm" onClick={() => executeSuggestion(s)}>✓ 直接成交</button>
-                  </div>
-                </div>
-              </div>
-            );
-          };
           return (
             <div className="search-list">
               {direct.length > 0 && (
                 <div className="sr-group">✓ 用当前筹码即可成交（{direct.length} 条）</div>
               )}
-              {cap(direct).map(row)}
+              {cap(direct).map(suggestionRow)}
               {upgrade.length > 0 && (
                 <div className="sr-group warn">
                   ⚠ 对方还想多要人（{upgrade.length} 条）——这些方案要你在勾选的筹码之外再追加球员/签，回报也更值钱
                 </div>
               )}
-              {cap(upgrade).map(row)}
+              {cap(upgrade).map(suggestionRow)}
               {!showAllResults && (direct.length > 10 || upgrade.length > 10) && (
                 <div className="btn-row" style={{ justifyContent: 'center' }}>
                   <button className="btn sm" onClick={() => setShowAllResults(true)}>
@@ -415,6 +499,22 @@ export function TradeView({ api }: { api: GameApi }) {
             </div>
           );
         })()}
+        {/* 模式 ②：反向报价（按我方净收益排序） */}
+        {searchMode === 'want' && targetResults && targetResults.length > 0 && (
+          <div className="search-list">
+            <div className="sr-group">
+              ✅ 对方愿意接受这些报价（{targetResults.length} 条，按你的净收益排序）——点「📨 发送报价」直接成交
+            </div>
+            {(showAllResults ? targetResults : targetResults.slice(0, 10)).map(suggestionRow)}
+            {!showAllResults && targetResults.length > 10 && (
+              <div className="btn-row" style={{ justifyContent: 'center' }}>
+                <button className="btn sm" onClick={() => setShowAllResults(true)}>
+                  显示全部 {targetResults.length} 条
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {view && <PlayerModal player={view.p} team={view.t} onClose={() => setView(null)} />}

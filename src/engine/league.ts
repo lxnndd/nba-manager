@@ -363,14 +363,21 @@ export function phaseLabel(p: TeamPhase): string {
   return p === 'contender' ? '争冠' : p === 'retool' ? '补强' : '重建';
 }
 
-// 球员在特定球队阶段眼中的价值权重：年轻=未来资产、老将=即时战力、26-28 岁中性
-function isFutureAsset(p: Player): boolean {
-  return p.age <= 25 || p.exp <= 3;
+// 球员在特定球队阶段眼中的价值：作用对象是「未来溢价」部分（见 tradeEff），
+// 当下战力（ovr + 合同性价比 + 球星稀缺）不受阶段影响——
+// 因此「更强且更年轻」的球员在任何阶段都不会被算得比「更弱更老」的低。
+export function phaseFutureWeight(phase: TeamPhase): number {
+  return phase === 'contender' ? 0.6 : phase === 'retool' ? 0.9 : 1.35;
 }
+// 某球队阶段眼中的球员价值（绝对估值，与 tradeValue 同尺度可直接比较）
+export function phaseValue(p: Player, phase: TeamPhase): number {
+  const { now, future } = tradeEff(p);
+  return effToValue(now + future * phaseFutureWeight(phase));
+}
+// 折算系数的展示口径（＝折算后价值 / 市场价值），用于 UI 文案"未来资产打 X 折"
 export function phasePlayerWeight(p: Player, phase: TeamPhase): number {
-  if (isFutureAsset(p)) return phase === 'contender' ? 0.75 : phase === 'retool' ? 0.92 : 1.28;
-  if (p.age >= 29) return phase === 'contender' ? 1.2 : phase === 'retool' ? 1.05 : 0.8;
-  return 1;
+  const base = tradeValue(p);
+  return base > 0 ? Math.round((phaseValue(p, phase) / base) * 100) / 100 : 1;
 }
 export function phasePickWeight(phase: TeamPhase): number {
   return phase === 'contender' ? 0.7 : phase === 'retool' ? 0.9 : 1.35;
@@ -620,53 +627,64 @@ export function sortRoster(team: Team): void {
 //  - 老将：31 岁起每年 eff -0.8（温和折价，避免 36+ 老超巨崩盘）；
 //  - 合同：溢价 eff-1.5 / 廉价 eff+1；球星稀缺（ovr≥90）eff+1；
 //  - 目标：22 岁 o72 p10 潜力新秀 ≈ 32 岁 o85 老将（价值对等）；选秀权与球员同尺度可比较。
-export function tradeValue(p: Player): number {
-  let eff = p.ovr;
+//
+// v2.5.1 重构：把等效能力拆成「当下战力 now」与「未来溢价 future」两部分。
+//   原因（用户反馈的真实案例）：萨博尼斯 85/29 岁 ↔ 莫布利 87/24 岁 竟被判「基本对等」——
+//   旧实现把年龄系数乘在**整个球员价值**上，争冠队 ×0.75 把「更强且更年轻」的莫布利打到
+//   2.475、把老将萨博尼斯 ×1.2 抬到 2.4，于是更强更年轻的球员反而被算成等价。
+//   现在球队阶段偏好**只作用于 future 部分**，当下战力（含合同性价比、球星稀缺）永远按原值计。
+export function tradeEff(p: Player): { now: number; future: number } {
+  let now = p.ovr;
+  let future = 0;
   const potEff = p.ovr + (p.potential - 5) * 3; // 潜力空间折算
   if (p.age <= 25 && potEff > p.ovr) {
     // 越年轻乘数越大：1+(25-age)×0.08（clamp 0.6-1.6）
     const ageFactor = clamp(1 + (25 - p.age) * 0.08, 0.6, 1.6);
-    eff += (potEff - p.ovr) * 0.55 * ageFactor;
+    future += (potEff - p.ovr) * 0.55 * ageFactor;
   } else if (p.age <= 25) {
-    eff += 0.5; // 年轻即战力小加分
+    future += 0.5; // 年轻即战力小加分
   }
-  if (p.age >= 31) eff -= (p.age - 30) * 0.8; // 31 岁起每年折损 0.8 等效能力
+  if (p.age >= 31) future -= (p.age - 30) * 0.8; // 31 岁起每年折损 0.8 等效能力
   const fair = salaryFor(p.ovr);
-  if (p.salary > fair * 1.15 && p.salary > 0) eff -= 1.5; // 明显溢价合同
-  else if (p.salary > 0 && p.salary < fair * 0.9) eff += 1; // 廉价合同（新秀红利）
-  if (p.ovr >= 90) eff += 1; // 顶级球星市场稀缺溢价
+  if (p.salary > fair * 1.15 && p.salary > 0) now -= 1.5; // 明显溢价合同
+  else if (p.salary > 0 && p.salary < fair * 0.9) now += 1; // 廉价合同（新秀红利）
+  if (p.ovr >= 90) now += 1; // 顶级球星市场稀缺溢价
+  return { now, future };
+}
+function effToValue(eff: number): number {
   return Math.max(0.1, Math.round(Math.pow(2, (eff - 75) / 10) * 100) / 100);
 }
+export function tradeValue(p: Player): number {
+  const { now, future } = tradeEff(p);
+  return effToValue(now + future);
+}
 
-// 未来选秀权估值（v2.3）：
-//  - 顺位质量按 f 队「当前战绩」实时推算（赛季前 8 场样本不足 → 用中性预期，不再"赛季 1 恒为盲盒 1"）；
-//  - 年份越远折价（不确定性 + 时间价值）：每远 1 年 ×0.88；
-//  - 轮次：次轮期望能力显著低于首轮（次轮 1 号 ≈ 末段首轮，次轮末 ≈ 0.3）。
+// 未来选秀权估值（v2.6.0：按用户指定的"初始价值"口径重做）
+//  - 初始价值（= 战绩中性时，开档 0-0 就是这些数）：首轮 1.5 / 1.2 / 1.0（未来第 1/2/3 年），
+//    次轮 0.4 / 0.3 / 0.2；超出表格的年份沿用最后一年（当前窗口只有 3 年）；
+//  - 战绩修正：签值多少钱看**原属球队**的当季战绩——摆烂队的签更值钱。
+//    质量系数 quality：首轮 [0.6, 1.4]、次轮 [0.8, 1.2]，联盟中位 = 1.0（正好等于初始价值）；
+//  - 样本不足（< 8 场）时按中性 1.0 计，与"初始价值"一致。
+const PICK_BASE: Record<number, number[]> = { 1: [1.5, 1.2, 1.0], 2: [0.4, 0.3, 0.2] };
 export function pickValue(l: LeagueState, pick: DraftPick): number {
   const draftYear = l.year + 1;                   // 下一个选秀年
   const off = Math.max(0, pick.year - draftYear); // 距今几届
+  const table = PICK_BASE[pick.round] ?? PICK_BASE[2];
+  const base = table[Math.min(off, table.length - 1)];
   const team = l.teams[pick.f];
   const played = team ? team.win + team.loss : 0;
-  let expOvr: number;
-  if (played < 8) {
-    expOvr = pick.round === 1 ? 74 : 58;          // 战绩样本不足 → 中性预期
-  } else {
+  let q = 0.5; // 中性位（联盟中位战绩）
+  if (played >= 8) {
     const sorted = [...l.teams].sort((a, b) => {
       const ra = a.win / Math.max(1, a.win + a.loss);
       const rb = b.win / Math.max(1, b.win + b.loss);
       return ra - rb || a.abbr.localeCompare(b.abbr);
     });
-    const r = Math.max(0, sorted.findIndex((t) => t.id === pick.f));
-    if (pick.round === 1) {
-      if (r < 5) expOvr = 84 - r * 0.8;             // 乐透区：1 号签期望 84 能力
-      else if (r < 15) expOvr = 78 - (r - 5) * 0.6; // 中段首轮
-      else expOvr = Math.max(62, 70 - (r - 15) * 0.5); // 末段首轮
-    } else {
-      expOvr = Math.max(54, 66 - r * 0.3);          // 次轮：1 号 66 → 30 号 57
-    }
+    const r = Math.max(0, sorted.findIndex((t) => t.id === pick.f)); // 0 = 联盟最差
+    q = 1 - r / Math.max(1, sorted.length - 1);                      // 1 = 最差（签最好）
   }
-  const val = Math.pow(2, (expOvr - 75) / 10) * Math.pow(0.88, off);
-  return Math.round(val * 100) / 100;
+  const quality = pick.round === 1 ? 0.6 + q * 0.8 : 0.8 + q * 0.4;
+  return Math.round(base * quality * 100) / 100;
 }
 
 // ---------- v2.3.0 乐透抽签（参照 NBA 2023 版劳资协议规则）----------
@@ -852,11 +870,12 @@ export function evaluateTrade(
   ]);
   if (err) return { accept: false, reason: err };
   // ---------- v2.5.0 AI 视角估值：按 AI 球队阶段（重建/补强/争冠）调整资产偏好 ----------
-  //   争冠队：选秀权与年轻球员打 7 折（更愿意付出未来换即战力）、即战力老将溢价 1.2 倍；
-  //   补强队：轻微倾斜（0.9 / 1.05）；
-  //   重建队：选秀权与年轻球员溢价 1.35 倍（非常重视未来资产）、老将打 8 折。
+  //   v2.5.1 修正：阶段偏好只作用于「未来溢价」（选秀权 100% 是未来资产；球员的潜力/年龄部分），
+  //   当下战力不参与打折——否则会出现"更强且更年轻"的球员被算成等价甚至更便宜的荒谬结果
+  //   （案例：争冠队眼中 87/24 岁的莫布利 3.3×0.75=2.5 ≈ 85/29 岁的萨博尼斯 2.0×1.2=2.4）。
+  //   现在：争冠 未来溢价×0.6（不愿为潜力付钱、也不过分计较年龄）、补强 ×0.9、重建 ×1.35。
   const phase = teamPhase(ai);
-  const wPlayer = (p: Player) => tradeValue(p) * phasePlayerWeight(p, phase);
+  const wPlayer = (p: Player) => phaseValue(p, phase);
   const wPick = (v: number) => v * phasePickWeight(phase);
   // AI 送出（want）与拿回（give）都按它的偏好折算
   const aiGiveVal = want.reduce((s, p) => s + wPlayer(p), 0) + wPick(wvPicks);
@@ -875,21 +894,22 @@ export function evaluateTrade(
     else if (giveAge >= 30) { tol -= 0.1 * aiGiveVal; mood = '（重建中：收老将要求明显赚头）'; }
     else mood = '（重建中：非常重视未来资产）';
   } else if (phase === 'contender') {
-    // 争冠队：愿为即战力买单、可透支年轻资产
-    if (giveAge >= 29) { tol += 0.06 * aiGiveVal; mood = '（争冠中：愿为即战力买单）'; }
-    else if (wantAge <= 25) { tol += 0.05 * aiGiveVal; mood = '（争冠中：可透支年轻资产换现在）'; }
+    // 争冠队：愿为即战力买单、可透支年轻资产（幅度已收敛，避免与上面的估值偏好重复放大）
+    if (giveAge >= 29) { tol += 0.04 * aiGiveVal; mood = '（争冠中：愿为即战力买单）'; }
+    else if (wantAge <= 25) { tol += 0.04 * aiGiveVal; mood = '（争冠中：可透支年轻资产换现在）'; }
     else mood = '（争冠中：看重即时战力）';
   } else {
     mood = '（补强中：较为看重即时战力）';
   }
   const valText = `${gvPlayers.toFixed(1)}${gvPicks ? `+签${gvPicks.toFixed(1)}` : ''} ↔ ${wvPlayers.toFixed(1)}${wvPicks ? `+签${wvPicks.toFixed(1)}` : ''}`;
+  const wText = `按${phaseLabel(phase)}偏好折算后 你给 ${aiGetVal.toFixed(1)} / 他给 ${aiGiveVal.toFixed(1)}`;
   if (aiGain >= -tol) {
     const feel = aiGain >= 0 ? '对方觉得这笔交易划算' : '对方觉得基本对等';
-    return { accept: true, reason: `${feel}${mood}（估值 ${valText}，按${phaseLabel(phase)}偏好折算后差 ${aiGain.toFixed(1)}）` };
+    return { accept: true, reason: `${feel}${mood}（原始估值 ${valText}；${wText}，差 ${aiGain.toFixed(1)}）` };
   }
   return {
     accept: false,
-    reason: `对方拒绝${mood}：送出价值 ${wv.toFixed(1)}，拿回 ${gv.toFixed(1)}（按${phaseLabel(phase)}偏好折算后亏 ${(-aiGain).toFixed(1)} 点，最多容忍 ${tol.toFixed(1)} 点）。估值：${valText}`,
+    reason: `对方拒绝${mood}：送出价值 ${wv.toFixed(1)}，拿回 ${gv.toFixed(1)}（${wText}，亏 ${(-aiGain).toFixed(1)} 点，最多容忍 ${tol.toFixed(1)} 点）。原始估值：${valText}`,
   };
 }
 
@@ -1175,6 +1195,9 @@ export function searchTrades(
     .slice(0, 3);
 
   const out: TradeSuggestion[] = [];
+  // v2.5.1：搜索结果的"你赚/你亏"改用**我方阶段偏好折算**后的价值（与能否成交口径一致）
+  const myPhase = teamPhase(me);
+  const myVal = (p: Player) => phaseValue(p, myPhase);
   for (const ai of l.teams) {
     if (ai.id === me.id) continue;
     const aiPlayers = new Map(ai.players.map((p) => [p.id, p]));
@@ -1199,9 +1222,9 @@ export function searchTrades(
       const gK = [...givePickIdx, ...extraK];
       const verdict = evaluateTrade(l, me.id, ai.id, gIds, wantPids, gK, wantPickIdx);
       if (!verdict.accept) return;
-      const gvAll = [...give, ...extraP].reduce((s, p) => s + tradeValue(p), 0) + gK.reduce((s, i) => s + pv(i), 0);
-      const wvAll = wantPids.reduce((s, pid) => s + tradeValue(aiPlayers.get(pid)!), 0)
-        + wantPickIdx.reduce((s, i) => s + pv(i), 0);
+      const gvAll = [...give, ...extraP].reduce((s, p) => s + myVal(p), 0) + gK.reduce((s, i) => s + pv(i) * phasePickWeight(myPhase), 0);
+      const wvAll = wantPids.reduce((s, pid) => s + myVal(aiPlayers.get(pid)!), 0)
+        + wantPickIdx.reduce((s, i) => s + pv(i) * phasePickWeight(myPhase), 0);
       const names = [
         ...wantPids.map((pid) => aiPlayers.get(pid)?.name ?? '?'),
         ...wantPickIdx.map((i) => pickLabel(l, l.draftPool[i])),
@@ -1255,6 +1278,118 @@ export function searchTrades(
     out.push(...normal, ...upgrade);
   }
   out.sort((a, b) => Number(a.needsMore) - Number(b.needsMore) || b.gain - a.gain);
+  return out;
+}
+
+// ---------- v2.6.0 反向报价搜索器：选定"我想要的对方球员/签" → 算出"我要付什么" ----------
+// 与 searchTrades 方向相反：输入 = 用户想要的目标（球员 id / 选秀权池下标），
+// 输出 = 该队愿意接受的"我方筹码组合"（按我方净收益排序）。
+export interface TargetSuggestion extends TradeSuggestion {
+  myGiveVal: number;  // 我方送出的价值（按我方阶段折算）
+  myGetVal: number;   // 我方得到的价值（按我方阶段折算）
+}
+
+export function searchTradeTargets(
+  l: LeagueState, wantPids: number[], wantPickIdx: number[], maxPerTeam = 3,
+): TargetSuggestion[] {
+  const me = l.teams[l.userTeamId];
+  if (!me) return [];
+  if (!wantPids.length && !wantPickIdx.length) return [];
+  const locked = new Set(l.lockedPids ?? []);
+  const pickVals = l.draftPool.map((pk) => pickValue(l, pk));
+  const pv = (i: number) => pickVals[i] ?? 0;
+  // 目标按"现属球队"分组（球员按所在队，选秀权按持有人 pk.o）
+  const groups = new Map<number, { pids: number[]; picks: number[] }>();
+  for (const pid of wantPids) {
+    const ai = l.teams.find((t) => t.id !== me.id && t.players.some((p) => p.id === pid));
+    if (!ai) continue;
+    const g = groups.get(ai.id) ?? { pids: [], picks: [] };
+    g.pids.push(pid);
+    groups.set(ai.id, g);
+  }
+  for (const i of wantPickIdx) {
+    const pk = l.draftPool[i];
+    if (!pk || pk.o === me.id) continue;
+    const g = groups.get(pk.o) ?? { pids: [], picks: [] };
+    g.picks.push(i);
+    groups.set(pk.o, g);
+  }
+  if (!groups.size) return [];
+
+  const myPhase = teamPhase(me);
+  const myVal = (p: Player) => phaseValue(p, myPhase);
+  const out: TargetSuggestion[] = [];
+
+  for (const [aiId, want] of groups) {
+    const ai = l.teams[aiId];
+    if (!ai) continue;
+    const aiPhase = teamPhase(ai);
+    // 对方对"我要的东西"的估价（他们索要多少）
+    const wantVal = want.pids.reduce((s, pid) => {
+      const p = ai.players.find((q) => q.id === pid);
+      return s + (p ? phaseValue(p, aiPhase) : 0);
+    }, 0) + want.picks.reduce((s, i) => s + pv(i) * phasePickWeight(aiPhase), 0);
+    if (wantVal <= 0) continue;
+    // 我方可动筹码（被锁定的球员不可交易）；价值剪枝：只保留与对方要价同量级的候选
+    const cands = me.players
+      .filter((p) => !locked.has(p.id))
+      .map((p) => ({ p, v: phaseValue(p, aiPhase) }))
+      .filter((x) => x.v >= wantVal * 0.4 && x.v <= wantVal * 2.6)
+      .sort((a, b) => Math.abs(a.v - wantVal) - Math.abs(b.v - wantVal))
+      .slice(0, 10);
+    const candPicks = l.draftPool
+      .map((pk, i) => ({ pk, i, v: pv(i) * phasePickWeight(aiPhase) }))
+      .filter((x) => x.pk.o === me.id && x.v <= wantVal * 2.2)
+      .sort((a, b) => b.v - a.v)
+      .slice(0, 4);
+
+    const found: TargetSuggestion[] = [];
+    const seen = new Set<string>();
+    const tryGive = (gP: Player[], gK: number[]) => {
+      if (!gP.length && !gK.length) return;
+      const key = `${gP.map((p) => p.id).sort((a, b) => a - b).join(',')}|${[...gK].sort((a, b) => a - b).join(',')}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const verdict = evaluateTrade(l, me.id, aiId, gP.map((p) => p.id), want.pids, gK, want.picks);
+      if (!verdict.accept) return;
+      const gvAll = gP.reduce((s, p) => s + myVal(p), 0) + gK.reduce((s, i) => s + pv(i) * phasePickWeight(myPhase), 0);
+      const wvAll = want.pids.reduce((s, pid) => {
+        const p = ai.players.find((q) => q.id === pid);
+        return s + (p ? myVal(p) : 0);
+      }, 0) + want.picks.reduce((s, i) => s + pv(i) * phasePickWeight(myPhase), 0);
+      const names = [
+        ...want.pids.map((pid) => ai.players.find((q) => q.id === pid)?.name ?? '?'),
+        ...want.picks.map((i) => pickLabel(l, l.draftPool[i])),
+      ];
+      found.push({
+        teamId: aiId,
+        givePids: gP.map((p) => p.id),
+        givePickIdx: gK,
+        wantPids: want.pids,
+        wantPickIdx: want.picks,
+        reason: verdict.reason,
+        gain: Math.round((wvAll - gvAll) * 100) / 100,
+        myGiveVal: Math.round(gvAll * 100) / 100,
+        myGetVal: Math.round(wvAll * 100) / 100,
+        needsMore: false,
+        note: `${ai.name} 愿意送出 ${names.join('、')}`,
+      });
+    };
+
+    // ① 单人 / ② 单人 + 1 签 / ③ 两人打包 / ④ 两人 + 1 签
+    for (const c of cands) tryGive([c.p], []);
+    for (const c of cands.slice(0, 6)) for (const k of candPicks.slice(0, 2)) tryGive([c.p], [k.i]);
+    for (let i = 0; i < Math.min(cands.length, 6); i++) {
+      for (let j = i + 1; j < Math.min(cands.length, 6); j++) tryGive([cands[i].p, cands[j].p], []);
+    }
+    for (let i = 0; i < Math.min(cands.length, 5); i++) {
+      for (let j = i + 1; j < Math.min(cands.length, 5); j++) {
+        if (candPicks[0]) tryGive([cands[i].p, cands[j].p], [candPicks[0].i]);
+      }
+    }
+    out.push(...found.sort((a, b) => b.gain - a.gain).slice(0, maxPerTeam));
+  }
+  out.sort((a, b) => b.gain - a.gain);
   return out;
 }
 
