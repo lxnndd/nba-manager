@@ -2,8 +2,8 @@
 
 > 用途：把本项目的**全部对话成果**压缩成一份自包含文档。新会话只需读这份文件 + 仓库源码，
 > 即可无缝接手开发，无需重看历史对话。
-> 最后更新：v1.0.0 公测版（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（私有）；
-> 已发布 Release：**v1.0.0 公测版**（含 `NBA-Manager-1.0.0.exe`）。
+> 最后更新：v1.0.1 公测版（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（**已转为公开**）；
+> 已发布 Release：**v1.0.1**（Latest，含 `NBA-Manager-1.0.1.exe`）与 v1.0.0（保留可回退）。
 
 ---
 
@@ -13,13 +13,23 @@
 |---|---|
 | 本地路径 | `C:\Users\10709\Desktop\AI\nba-manager` |
 | 技术栈 | Electron 33 + React 19 + TypeScript 5.7 + Vite 6（纯离线单机，无后端） |
-| 当前版本 | **1.0.0**（公测版；package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
-| 交付产物 | `release\NBA-Manager-1.0.0.exe`（便携版，双击即玩，89.65 MB）+ GitHub Release v1.0.0 |
+| 当前版本 | **1.0.1**（公测版；package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
+| 交付产物 | `release\NBA-Manager-1.0.1.exe`（便携版，双击即玩，89.65 MB）+ GitHub Release v1.0.1（Latest） |
 | 目标用户 | 用户的弟弟（玩英文名单的真实 NBA 模式）；玩家=一支 NBA 球队的总经理 |
 | 名单模式 | `real`（2K27 真实名单，主力玩法）/ `fictional`（虚构名单，自测基线） |
 | 存档 | `%APPDATA%\NBA经理\saves\auto.json`（Electron）或 localStorage 兜底；`SAVE_VERSION = 11` |
 | 自测 | `src/engine/selfTest.ts`（虚构 + 真实双跑，390+ 断言，全绿才发版） |
-| 本版主题 | **1.0.0 公测版发布**：真实 NBA 照片背景（50 张 / 5 秒 / 游戏内可见）· 阵容卡片改造（时间球权入卡片 / 去薪资 / **拖动排序**）· 修复主菜单切图闪黑 · 数据榜实时全量 · 联盟居中大按钮 · 已上传 GitHub |
+| 本版主题 | **球队定位改看战绩**（20 场后胜率 < 20% 重建；40 场后落后分区第 8 ≥10 胜场也重建）· 移除轮换与战术面板 · 交易搜索器居中且结果全显示 · 数据榜真正居中 · 公告只写本次 · 修单实例锁 |
+
+**本版（v1.0.1）各档案章节更新要点**
+
+| 档案章节 | 更新要点 |
+|---|---|
+| §3 需求演化史 | 新增 v1.0.1 行（战绩定位 + UI 精简） |
+| §5.7 交易 | `teamPhase(t, l?)` 新增联盟上下文参数：40 场落后第 8 ≥10 胜场 → 重建；20 场后按战绩 |
+| §10 经验 | **本机沙箱限制**（workspace-write 写不了 `%APPDATA%`/`%TEMP%`）与 Electron 测试绕行 |
+
+**上一版（v1.0.0）各档案章节更新要点**
 
 **本版（v1.0.0）各档案章节更新要点**
 
@@ -191,6 +201,8 @@ node tools/ui-smoke.mjs 9333
 | **v2.7.1** | ①「5s轮换，现在太快了，这些背景玩游戏的时候也能看见」②「球员数据榜还是不能实时同步，我都打了3天还是没数据，不要加出场大于8场这种限制，括号里面也去了，这种说明性文字少出现」③「联盟界面的也都居中，按钮变大一点，现在太小了」④「乱换战术界面，我现在想法是和下面的卡片结合起来」⑤「上面的风格执教和羁绊要能点开查看详情」 | ①背景轮播 1s → **5s**；把 `BACKDROPS`/轮播逻辑抽到新文件 `src/ui/backdrops.ts`（`useBackdropRotation()`），`App.tsx` 加 `<GameBackdrop>` —— `.game-bg-wrap` 固定在底层 `opacity:.2` 控整体透明度、内层两层做交叉淡入，**游戏内因此也能看见照片** ②`LeagueView` 改为 `leaders(l, stat, 0, poMode)`（去掉常规赛 8 场 / 季后赛 1 场门槛），`.leaders-count` 去掉括号说明，并删掉"（季后赛独立统计…）/（数据实时更新）"；实测开季榜单从 0 → **450 人**（全联盟） ③`LeagueView` 加 `view-full league-view`，CSS 让 `.tabs`/`.conf-grid`/`.leaders-box` 居中、`.tab` 15px/9×24、`.chip-btn` 与 `.btn.sm` 加大 ④删掉 `.rot-toolbar` 里的发起位按钮组，改为**点位置列标题**（`.pos-head` + `.initiator` 高亮 + 🎯）直接设置 `me.initiator` ⑤球队气质的风格/执教/羁绊 chip 改为按钮 → `.info-modal` 详情弹窗（风格与执教列出全部选项并标出当前所选；羁绊列出每组的实算加成与相关球员名单） |
 
 | **v1.0.0**（公测版） | ①「现在切换背景会黑一会，要的是渐变到下一张，游戏里是对的，但是主菜单有问题」②「把球员上场时间和权值加到下面的卡片里，把卡片做大点来适应新加入的，删掉卡片上的薪资，调整上下的按钮去除，改为拖动来进行」③「完成这些之后这一版上线公测，版本号为1.0.0，上传github并删除之前的版本」 | ①主菜单闪黑有两个原因：`.title-bg-alt` 的 class **不匹配** v1.1 段那条高优先级的 `.title-screen > *:not(.title-bg):not(.title-bg-overlay)` 规则，被强制成 `position:relative` 掉进布局流；且 `.title-bg` 原本写的是 `transition: background-image`（该属性无法过渡）。修法：两条规则都补上 `:not(.title-bg-alt)`、过渡改为 `opacity .55s` ②`RosterView` 位置卡片：把「时间」「球权」输入搬进 `.rc-foot`（`.rc-field` + `.rf-btn`），删掉 `.rc-right` 的薪资与 `.move-btns` 的 ↑↓；改为**拖动排序** —— 卡片自身加 `onDragOver/onDrop`（`stopPropagation`），同列拖动 = 重排，拖到另一列 = 主副互换 ③版本号 2.7.1 → **1.0.0**（公测），打包 + ui-smoke 全绿后发布：`gh api` 建 tag `v1.0.0` + `gh release create` 上传 exe。**注意**：`tools/prune-old-releases.mjs` 原按版本号排序，遇到版本号回退（2.7.1 → 1.0.0）会把刚打出的新版误删，已改为**按构建时间**排序 |
+
+| **v1.0.1** | ①「球队的定位在打了20场之后根据战绩来修正，胜率不足20，直接重建状态」②「打了40场之后，胜场和第八的球队差距大于等于10也进入重建」③「公告不用把之前的都写进去了」④「轮换与战术就可以去了，其功能已经被其他板块瓜分了」⑤「交易搜索器的框也居中，同样去除多余文字解释，不需要展开」⑥「球员数据榜还是没居中」 | ①`teamPhase(t, l?)` 增加**联盟上下文参数**：`gp>=20` 时改按战绩（`wr<0.20`→重建；`wr>=0.55` 或 `wr>=0.45 && avg>85`→争冠；`wr>=0.40 || avg>=80`→补强）；`gp>=40` 且**落后本分区第 8 名 ≥10 个胜场 → 直接重建**；20 场前仍按阵容（valueOvr 前 5 均值）。所有调用点补传 `l`（`league.ts` 4 处 / `TradeView` 3 组 / `selfTest`） ②`ChangelogModal` 的 ITEMS 只保留本次更新（此前累积了 **47 条**历史条目） ③删除 `.rot-panel` 整块，只留一条 `.rot-bar`（自定义状态 + 恢复自动轮换）——分钟/球权已在位置卡片里改、发起位置点位置卡片标题 ④`.trade-search` 加 `max-width:1180px; margin:auto` 并让 `tabs/btn-row/sr-group` 居中；**删掉 `showAllResults` 分页机制**（原来只显示 10 条、要点"显示全部 N 条"才展开），结果直接全部列出 ⑤`.league-view .leaders-tbl { max-width:none; margin:auto }` —— 原来表格被 `max-width:760px` 限制，在 1120px 的容器里是**左对齐**的，这才是"数据榜没居中"的真正原因 ⑥修单实例锁（见 §10.31） |
 
 **迭代工作方式（继续保持）**：用户（转述弟弟反馈）给需求 → 直接实现 → 全量验证链 → 打包 exe → 更新 Changelog/使用说明 → 交付产物路径 + 变更说明；涉及行为改动时在 `使用说明.txt` 顶部加版本段。
 ⚠️ v2.6.0 起用户要求"**每次测试时间太长，只测试改的功能**"：优先跑 `tsc` + 针对本次改动的定向脚本（`tools/temp-*.ts|mjs`，用完删除），全量 selfTest / ui-smoke 只在发版前或改动涉及全局数值时再跑。
@@ -777,6 +789,20 @@ faDay/faOffers/poffExitShown/pendingEvents/draft → **v2.5.0：`poGp/poStats` �
     保留"最新"，而公测版把 2.7.1 回退成 1.0.0 —— 脚本于是把刚构建出来的 1.0.0 当旧版删了。
     **改为按文件 mtime 排序**（保留"最近构建的"），与"更新就删旧的"这个真实意图一致。
     通用规则：**"新旧"的判据要用生成时间，不要用可能回退的编号。**
+30. **本机 DSH 沙箱会挡住 Electron 测试（v1.0.1 实测，重要）**：本会话的沙箱策略是 `workspace-write`
+    （记录在 `~/.dsh/storages/session_projcache.json`；**会话首轮即冻结、会话内改不了**），后果是
+    **能写工作目录、但写不了 `%APPDATA%` / `%TEMP%`**。这直接毁掉两件日常事：
+    - `electron-builder` 报 `EPERM: mkdtemp '%TEMP%\t-XXXXXX'` → 解决：把 `$env:TEMP` / `$env:TMP` 指到项目内目录；
+    - Electron 起不来（app 初始化必须写 userData，写不了就在**启动阶段崩溃/黑屏**）→ 解决：
+      `Start-Process exe -ArgumentList "--user-data-dir=<项目内目录>"`。
+    ⚠️ **千万别把沙箱造成的黑屏误判成"exe 坏了 / 用户电脑有问题"**——本次为此绕了很大一圈，
+    实际上交付的 exe 一直是好的（弟弟能正常游玩就是证据）。要根治：让用户把沙箱改成
+    `danger-full-access` 并**开新会话**（当前会话内改了不生效）。
+31. **单实例锁不能配 `process.exit()`（v1.0.1 踩坑）**：为修"第二个实例会先建出黑窗口再退出"，
+    曾在 `requestSingleInstanceLock()` 失败分支写 `app.quit(); process.exit(0);` —— 但在**受限环境里
+    锁本来就容易返回 false**，于是表现为"双击毫无反应、连窗口都没有"；**事件日志里没有任何崩溃记录
+    （= 进程正常退出）正是判断这条的线索**。正确写法：只 `app.quit()`，另存 `gotLock` 标志，
+    在 `app.whenReady()` 里 `if (!gotLock) return;` 挡住建窗。调试可用 `NBA_SKIP_SINGLE_INSTANCE=1` 跳过锁。
 
 ---
 
