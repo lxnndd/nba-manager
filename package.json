@@ -1,7 +1,7 @@
 {
   "name": "nba-manager",
   "productName": "NBA经理",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "单机 NBA 球队经理游戏",
   "main": "electron/main.cjs",
@@ -45,7 +45,6 @@
     "asar": true,
     "win": {
       "icon": "build/icon.png",
-      "signAndEditExecutable": false,
       "target": [
         {
           "target": "portable",
@@ -53,7 +52,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "signAndEditExecutable": false
     },
     "portable": {
       "artifactName": "NBA-Manager-${version}.exe"

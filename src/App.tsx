@@ -79,7 +79,7 @@ export default function App() {
         <header className="topbar">
           <div className="tb-left">
             <span className="logo">🏀 NBA 经理</span>
-            <span className="version">v1.0.1</span>
+            <span className="version">v1.0.2</span>
           </div>
           <div className="tb-right">
             <span className="save-state">{saveClock}</span>
@@ -100,7 +100,7 @@ export default function App() {
       <header className="topbar">
         <div className="tb-left">
           <span className="logo">🏀 NBA 经理</span>
-          <span className="version">v1.0.1</span>
+          <span className="version">v1.0.2</span>
         </div>
         <nav className="tb-nav">
           {NAV.map((n) => (

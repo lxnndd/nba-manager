@@ -38,15 +38,35 @@ const fs = require('fs');
 app.commandLine.appendSwitch('no-sandbox');
 app.commandLine.appendSwitch('disable-gpu-sandbox');
 
+// ---------- v1.0.2：userData 写不了会让 app 直接起不来 ----------
+// 症状：普通用户双击没反应 / 黑屏，但"以管理员身份运行"就正常——因为 app 初始化必须写 userData
+//   （权限策略、目录被提权创建、只读重定向等都会让普通用户写不进去）。
+// 策略：**先探测默认 userData（%APPDATA%\NBA经理）能不能写**——能写就照旧用（旧存档不丢）；
+//   写不了才回退到 exe 同级目录（portable 版在用户自己的目录里，必定可写）。
+try {
+  const defUd = app.getPath('userData');
+  fs.mkdirSync(defUd, { recursive: true });
+  fs.accessSync(defUd, fs.constants.W_OK);
+} catch {
+  try {
+    const fallback = path.join(path.dirname(process.execPath), 'NBA经理-data');
+    fs.mkdirSync(fallback, { recursive: true });
+    app.setPath('userData', fallback);
+    console.warn('[nba-manager] 默认 userData 不可写，已回退到 exe 同级目录：' + fallback);
+  } catch { /* 实在不行就用默认路径继续尝试 */ }
+}
+
 // ---------- 单实例锁：避免开两个窗口写同一个存档 ----------
 // ⚠️ 这里**绝对不能** process.exit()：在受限环境（沙箱 / 权限策略 / 驱动）下
 //   requestSingleInstanceLock() 可能直接返回 false，一旦 exit 就永远起不来（无窗口、无报错）。
 //   正确做法：只 quit()，并在下面的 whenReady 里用 gotLock 挡住建窗（避免"黑屏窗口"）。
-// NBA_SKIP_SINGLE_INSTANCE=1：跳过单实例锁（仅用于受限环境排查/调试，普通玩家不需要设置）
+// ⚠️ 单实例锁只是"防多开写坏存档"，**失败时绝对不能退出程序**：
+//   在受限权限 / 企业安全策略 / 沙箱环境下 requestSingleInstanceLock() 会直接返回 false，
+//   一旦在这里 quit，用户看到的就是"双击毫无反应，只有管理员运行才能打开"（v1.0.1 实测症状）。
+//   所以锁不可用时退化为"允许开多个窗口"，优先保证游戏能启动。
+//   需要临时跳过多开保护：设环境变量 NBA_SKIP_SINGLE_INSTANCE=1。
 const gotLock = process.env.NBA_SKIP_SINGLE_INSTANCE === '1' ? true : app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-} else {
+if (gotLock) {
   app.on('second-instance', () => {
     const win = BrowserWindow.getAllWindows()[0];
     if (win) {
@@ -54,6 +74,8 @@ if (!gotLock) {
       win.focus();
     }
   });
+} else {
+  console.warn('[nba-manager] 单实例锁不可用（受限环境）—— 继续启动，允许多开');
 }
 
 // ---------- 窗口 ----------
@@ -145,7 +167,7 @@ ipcMain.handle('save:remove', (e, name) => {
 
 // ---------- 启动 ----------
 app.whenReady().then(() => {
-  if (!gotLock) return; // 第二个实例不建窗口（否则用户会看到一个"黑屏窗口"）
+  // 注意：这里**不能**用 gotLock 挡住建窗——锁在受限环境下会失败，但窗口必须照建
   createWindow();
   // 自测模式：验证主进程链路后自动退出（构建验证用）
   if (process.env.DSH_AUTOQUIT_MS) {
