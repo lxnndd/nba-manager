@@ -27,8 +27,24 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+// ---------- v1.0.1：Chromium 沙箱兼容兜底（修"双击打不开 / 黑屏窗口"）----------
+// 实测（同一台机器、同一个 user-data-dir 做 A/B 对照）：
+//   · 保留沙箱 → Electron 启动阶段即崩溃（退出码 0x80000003），表现为"双击没反应"或一个黑屏窗口；
+//   · 关掉沙箱 → 1~2 秒内正常出窗口。
+//   原因通常是安全策略 / 驱动 hook / 受限父进程让 Chromium 沙箱初始化失败（换台机器就正常，
+//   这也是"弟弟能玩、本机不行"的典型成因）。
+// 取舍：本项目是**纯离线单机游戏**（不加载远程内容、不执行外部脚本），关掉渲染器沙箱的收益
+//   远大于风险。若想恢复，注释掉下面两行即可。
+app.commandLine.appendSwitch('no-sandbox');
+app.commandLine.appendSwitch('disable-gpu-sandbox');
+
 // ---------- 单实例锁：避免开两个窗口写同一个存档 ----------
-if (!app.requestSingleInstanceLock()) {
+// ⚠️ 这里**绝对不能** process.exit()：在受限环境（沙箱 / 权限策略 / 驱动）下
+//   requestSingleInstanceLock() 可能直接返回 false，一旦 exit 就永远起不来（无窗口、无报错）。
+//   正确做法：只 quit()，并在下面的 whenReady 里用 gotLock 挡住建窗（避免"黑屏窗口"）。
+// NBA_SKIP_SINGLE_INSTANCE=1：跳过单实例锁（仅用于受限环境排查/调试，普通玩家不需要设置）
+const gotLock = process.env.NBA_SKIP_SINGLE_INSTANCE === '1' ? true : app.requestSingleInstanceLock();
+if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
@@ -129,6 +145,7 @@ ipcMain.handle('save:remove', (e, name) => {
 
 // ---------- 启动 ----------
 app.whenReady().then(() => {
+  if (!gotLock) return; // 第二个实例不建窗口（否则用户会看到一个"黑屏窗口"）
   createWindow();
   // 自测模式：验证主进程链路后自动退出（构建验证用）
   if (process.env.DSH_AUTOQUIT_MS) {

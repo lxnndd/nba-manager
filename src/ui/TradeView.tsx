@@ -34,7 +34,7 @@ export function TradeView({ api }: { api: GameApi }) {
   const [searchResults, setSearchResults] = useState<TradeSuggestion[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchMsg, setSearchMsg] = useState<string | null>(null);
-  const [showAllResults, setShowAllResults] = useState(false);
+  // v1.0.1：搜索器结果不再分页/折叠，直接全部显示（原"显示全部 N 条"按钮已移除）
   // v2.6.0：搜索器两种模式 —— give = 我出筹码看各队给什么；want = 我想要谁、算我要付什么
   const [searchMode, setSearchMode] = useState<'give' | 'want'>('give');
   const [targetResults, setTargetResults] = useState<TargetSuggestion[] | null>(null);
@@ -57,7 +57,7 @@ export function TradeView({ api }: { api: GameApi }) {
     const gv = myGive.reduce((s, p) => s + tradeValue(p), 0) + givePicks.reduce((s, i) => s + pickValue(l, l.draftPool[i]), 0);
     const wv = theirGive.reduce((s, p) => s + tradeValue(p), 0) + wantPicks.reduce((s, i) => s + pickValue(l, l.draftPool[i]), 0);
     // v2.5.1：同时给出「按我方/对方球队阶段折算后」的价值（决策用的就是折算值）
-    const myPh = teamPhase(me), theirPh = teamPhase(target);
+    const myPh = teamPhase(me, l), theirPh = teamPhase(target, l);
     const myPhaseVal = myGive.reduce((s, p) => s + phaseValue(p, myPh), 0)
       + givePicks.reduce((s, i) => s + pickValue(l, l.draftPool[i]) * phasePickWeight(myPh), 0);
     const theirPhaseVal = theirGive.reduce((s, p) => s + phaseValue(p, theirPh), 0)
@@ -111,7 +111,6 @@ export function TradeView({ api }: { api: GameApi }) {
       try {
         const res = searchTrades(l, giveIds, givePicks, 3);
         setSearchResults(res);
-        setShowAllResults(false);
         setSearchMsg(res.length
           ? `找到 ${res.length} 个可行组合（${new Set(res.map((r) => r.teamId)).size} 支球队）`
           : '没有球队愿意接受当前筹码——试试换更值钱的筹码，或勾选多几名球员（AI 常常想要打包）。');
@@ -160,7 +159,6 @@ export function TradeView({ api }: { api: GameApi }) {
       try {
         const res = searchTradeTargets(l, wantIds, wantPicks, 3);
         setTargetResults(res);
-        setShowAllResults(false);
         setSearchMsg(res.length
           ? `对方愿意接受 ${res.length} 种报价（${new Set(res.map((r) => r.teamId)).size} 支球队）——可直接「📨 发送报价」成交`
           : '对方不愿意放人：他可能是非卖品（核心/招牌球员），或你的筹码与他的身价不匹配——试试加一枚首轮签，或换成更值钱的球员。');
@@ -195,7 +193,7 @@ export function TradeView({ api }: { api: GameApi }) {
           <TeamLogo abbr={t.abbr} size="xs" />
           <b>{t.city} {t.name}</b>
           <span className="dim">{t.win}-{t.loss}</span>
-          <span className={`chip phase-${teamPhase(t)} sr-phase`}>{phaseLabel(teamPhase(t))}</span>
+          <span className={`chip phase-${teamPhase(t, l)} sr-phase`}>{phaseLabel(teamPhase(t, l))}</span>
           {s.needsMore && <span className="sr-tag">需追加筹码</span>}
           <span className={`sr-gain ${s.gain >= 0 ? 'good' : 'bad'}`}>
             {s.gain >= 0 ? `你赚 ${s.gain.toFixed(1)}` : `你亏 ${(-s.gain).toFixed(1)}`}
@@ -247,8 +245,8 @@ export function TradeView({ api }: { api: GameApi }) {
 
   const pay = payrollOf(me.players);
   // v2.5.0：对方球队阶段（争冠 >85 / 补强 80-85 / 重建 <80，按队内最强 5 人平均 OVR）
-  const targetPhase = teamPhase(target);
-  const myPhase = teamPhase(me);
+  const targetPhase = teamPhase(target, l);
+  const myPhase = teamPhase(me, l);
   const phaseHint = targetPhase === 'contender'
     ? '争冠队：看重当下战力，只把球员的"未来溢价"（潜力/年龄）算 6 折——愿意用选秀权和潜力股换即战力；当下更弱的球员不会因为年轻就被高估'
     : targetPhase === 'retool'
@@ -419,9 +417,6 @@ export function TradeView({ api }: { api: GameApi }) {
             {verdict.accept ? '✅ ' : '❌ '}{verdict.reason}
           </div>
         )}
-        {!verdict && (giveIds.length > 0 || givePicks.length > 0 || wantIds.length > 0 || wantPicks.length > 0) && (
-          <div className="verdict no">请在左右两边各至少选择一名球员/一枚签。</div>
-        )}
       </div>
 
       {/* ===== v2.3.0 交易搜索器（v2.6.0 加反向报价：想要谁 → 算我要付什么）===== */}
@@ -467,26 +462,18 @@ export function TradeView({ api }: { api: GameApi }) {
         {searchMode === 'give' && searchResults && searchResults.length > 0 && (() => {
           const direct = searchResults.filter((s) => !s.needsMore);
           const upgrade = searchResults.filter((s) => s.needsMore);
-          const cap = (arr: TradeSuggestion[]) => (showAllResults ? arr : arr.slice(0, 10));
           return (
             <div className="search-list">
               {direct.length > 0 && (
                 <div className="sr-group">✓ 用当前筹码即可成交（{direct.length} 条）</div>
               )}
-              {cap(direct).map(suggestionRow)}
+              {direct.map(suggestionRow)}
               {upgrade.length > 0 && (
                 <div className="sr-group warn">
-                  ⚠ 对方还想多要人（{upgrade.length} 条）——这些方案要你在勾选的筹码之外再追加球员/签，回报也更值钱
+                  ⚠ 对方还想多要人（{upgrade.length} 条）
                 </div>
               )}
-              {cap(upgrade).map(suggestionRow)}
-              {!showAllResults && (direct.length > 10 || upgrade.length > 10) && (
-                <div className="btn-row" style={{ justifyContent: 'center' }}>
-                  <button className="btn sm" onClick={() => setShowAllResults(true)}>
-                    显示全部 {searchResults.length} 条
-                  </button>
-                </div>
-              )}
+              {upgrade.map(suggestionRow)}
             </div>
           );
         })()}
@@ -494,16 +481,9 @@ export function TradeView({ api }: { api: GameApi }) {
         {searchMode === 'want' && targetResults && targetResults.length > 0 && (
           <div className="search-list">
             <div className="sr-group">
-              ✅ 对方愿意接受这些报价（{targetResults.length} 条，按你的净收益排序）——点「📨 发送报价」直接成交
+              ✅ 对方愿意接受这些报价（{targetResults.length} 条，按你的净收益排序）
             </div>
-            {(showAllResults ? targetResults : targetResults.slice(0, 10)).map(suggestionRow)}
-            {!showAllResults && targetResults.length > 10 && (
-              <div className="btn-row" style={{ justifyContent: 'center' }}>
-                <button className="btn sm" onClick={() => setShowAllResults(true)}>
-                  显示全部 {targetResults.length} 条
-                </button>
-              </div>
-            )}
+            {targetResults.map(suggestionRow)}
           </div>
         )}
       </div>

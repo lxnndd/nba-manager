@@ -1,6 +1,6 @@
 // 引擎数值自测：node 下直接运行（编译后）
 // 验证：名单结构、比分分布、全季推进、季后赛、赛季奖项、休赛期（FA/AI交易）、存档迁移
-import { createLeague, createRealLeague, repositionPlayer, bodyKeys, genRookie, genDraftClass, genFreeAgent, TEAM_STYLES, COACH_STYLES, applyTeamStyle, applyCoachStyle, assignTags, calcOvr, SKILL_KEYS, genSkills, POS_SEC } from './gen';
+import { createLeague, createRealLeague, repositionPlayer, bodyKeys, genRookie, genDraftClass, genFreeAgent, TEAM_STYLES, COACH_STYLES, applyTeamStyle, applyCoachStyle, assignTags, calcOvr, SKILL_KEYS, genSkills, POS_SEC, valueOvr } from './gen';
 import { simulateGame, bondMods, teamEffMods } from './sim';
 import { simDay, runPlayoffRound, simPlayoffGame, playoffChampion, evaluateTrade, applyTrade, standings, leaders, nextGameOf, playedCount, migrateSave, teamStrength, pickValue, tradeValue, ROSTER_MAX, payrollOf, SALARY_CAP, TAX_LINE, refreshPlayoffPlaceholders, tryAITradeOfferToUser, acceptTradeOffer, rejectTradeOffer, pickLabel, lotteryOrder, rookieScaleSalary, searchTrades, searchTradeTargets, GP_CAP, GP_TRADE_TOLERANCE, teamPhase, phaseLabel, phasePlayerWeight, phasePickWeight, phaseValue, tradeEff } from './league';
 import { computeSeasonAwards, computeFinalsMVP } from './awards';
@@ -99,17 +99,53 @@ function runOffseasonFlow(l: LeagueState, tag: string, offerTest: boolean): void
 
   // ---------- v2.5.0：球队三状态（争冠 / 补强 / 重建）----------
   {
-    const cnt = (ph: string) => l.teams.filter((t) => teamPhase(t) === ph).length;
+    const cnt = (ph: string) => l.teams.filter((t) => teamPhase(t, l) === ph).length;
     console.log(`  ${tag} 球队状态：争冠 ${cnt('contender')} · 补强 ${cnt('retool')} · 重建 ${cnt('rebuild')}`);
     ok(cnt('contender') + cnt('retool') + cnt('rebuild') === 30, `${tag} 30 队都有交易状态`);
     const mism: string[] = [];
     for (const t of l.teams) {
-      const top5 = [...t.players].sort((a, b) => b.ovr - a.ovr).slice(0, 5);
-      const avg = top5.length ? top5.reduce((s, p) => s + p.ovr, 0) / top5.length : 0;
-      const want = avg > 85 ? 'contender' : avg >= 80 ? 'retool' : 'rebuild';
-      if (teamPhase(t) !== want) mism.push(`${t.abbr}(${avg.toFixed(1)})`);
+      const top5 = [...t.players].sort((a, b) => valueOvr(b) - valueOvr(a)).slice(0, 5);
+      const avg = top5.length ? top5.reduce((s, p) => s + valueOvr(p), 0) / top5.length : 0;
+      const gp = t.win + t.loss;
+      // v1.0.1：40 场后落后本分区第 8 名 ≥10 个胜场 → 重建（优先级最高）
+      const sameConf = l.teams
+        .filter((x) => x.conf === t.conf)
+        .sort((a, b) => (b.win - b.loss) - (a.win - a.loss) || b.win - a.win);
+      const eighth = sameConf[7];
+      const farBehind = gp >= 40 && !!eighth && eighth.id !== t.id && eighth.win - t.win >= 10;
+      let want: string;
+      if (farBehind) {
+        want = 'rebuild';
+      } else if (gp >= 20) {
+        // v1.0.1：20 场后按战绩修正（胜率 < 20% 直接重建）
+        const wr = t.win / gp;
+        want = wr < 0.20 ? 'rebuild'
+          : (wr >= 0.55 || (wr >= 0.45 && avg > 85)) ? 'contender'
+            : (wr >= 0.40 || avg >= 80) ? 'retool' : 'rebuild';
+      } else {
+        // 20 场前仍按阵容（首发 5 人均值）
+        want = avg > 85 ? 'contender' : avg >= 80 ? 'retool' : 'rebuild';
+      }
+      if (teamPhase(t, l) !== want) mism.push(`${t.abbr}(${t.win}-${t.loss}, 均值${avg.toFixed(1)})`);
     }
-    ok(mism.length === 0, `${tag} 状态判定 = 首发 5 人均值阈值（异常 ${mism.length}）`);
+    ok(mism.length === 0, `${tag} 状态判定 = 20 场前看阵容 / 20 场后按战绩（异常 ${mism.length}）`);
+    // v1.0.1 专项：打满 20 场且胜率 < 20% 的队必须是重建
+    const badLo = l.teams.filter((t) => {
+      const gp = t.win + t.loss;
+      return gp >= 20 && t.win / gp < 0.20 && teamPhase(t, l) !== 'rebuild';
+    });
+    ok(badLo.length === 0, `${tag} 胜率 < 20% 直接判重建（异常 ${badLo.length}）`);
+    // v1.0.1 专项：打满 40 场且落后本分区第 8 名 ≥10 个胜场 → 必须是重建
+    const badFar = l.teams.filter((t) => {
+      const gp = t.win + t.loss;
+      if (gp < 40) return false;
+      const sc = l.teams
+        .filter((x) => x.conf === t.conf)
+        .sort((a, b) => (b.win - b.loss) - (a.win - a.loss) || b.win - a.win);
+      const e8 = sc[7];
+      return !!e8 && e8.id !== t.id && e8.win - t.win >= 10 && teamPhase(t, l) !== 'rebuild';
+    });
+    ok(badFar.length === 0, `${tag} 40 场后落后第 8 名 ≥10 胜场 → 重建（异常 ${badFar.length}）`);
     const young = { age: 22, exp: 1, ovr: 72, potential: 10, salary: 500 } as Player;
     const vet = { age: 32, exp: 9, ovr: 85, potential: 6, salary: 3000 } as Player;
     ok(phasePlayerWeight(young, 'rebuild') > phasePlayerWeight(young, 'contender'), `${tag} 年轻球员在重建队更值钱`);
@@ -1386,7 +1422,7 @@ function runReal(): void {
       const cle = l.teams.find((t) => t.players.some((p) => p.id === mob.id));
       const sac = l.teams.find((t) => t.players.some((p) => p.id === dom.id));
       if (cle && sac) {
-        const ph = teamPhase(cle);
+        const ph = teamPhase(cle, l);
         const vMob = phaseValue(mob, ph), vSab = phaseValue(dom, ph);
         const tr = evaluateTrade(l, sac.id, cle.id, [dom.id], [mob.id], [], []);
         console.log(`  实例回归：${cle.abbr}(${phaseLabel(ph)}) 眼中 莫布利 ${vMob.toFixed(2)} vs 萨博尼斯 ${vSab.toFixed(2)} → ${tr.accept ? '成交（异常！）' : '拒绝'}`);

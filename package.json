@@ -1,7 +1,7 @@
 {
   "name": "nba-manager",
   "productName": "NBA经理",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "单机 NBA 球队经理游戏",
   "main": "electron/main.cjs",

@@ -1066,6 +1066,9 @@ tr.clickable:hover td { background: rgba(255,166,60,.07); }
 .league-view .conf-grid { max-width: 1240px; width: 100%; margin: 0 auto; }
 .league-view .leaders-wrap { align-items: center; width: 100%; }
 .league-view .leaders-box { max-width: 1120px; margin: 0 auto; }
+/* v1.0.1：表格本体也要居中——原来 .leaders-tbl 有 max-width:760px，在 1120px 的盒子里是左对齐的 */
+.league-view .leaders-tbl { max-width: none; margin-left: auto; margin-right: auto; }
+.league-view .leaders-count { text-align: center; }
 .league-view .chip-btn { font-size: 13px; padding: 6px 14px; }
 
 /* ④ 战术发起位置：直接点位置卡片标题 */
@@ -1184,3 +1187,23 @@ button.meta-chip { cursor: pointer; font-family: inherit; }
 
 /* 自由市场位置筛选 */
 .fa-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+
+/* =====================================================================
+   v1.0.1：移除「轮换与战术」面板（只留状态/重置工具条）+ 交易搜索器居中
+   ===================================================================== */
+/* ① 状态 / 重置工具条（替代原 rot-panel） */
+.rot-bar {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 8px 14px;
+}
+.rot-bar .spacer { flex: 1; }
+
+/* ② 交易搜索器：整个框居中 + 内容居中 */
+.trade-search { max-width: 1180px; margin-left: auto; margin-right: auto; width: 100%; }
+.trade-search .action-title { text-align: center; }
+.trade-search .tabs { align-self: center; }
+.trade-search .btn-row { justify-content: center; }
+.trade-search .sr-group { text-align: center; }
+/* 结果不再折叠 → 去掉内部滚动条，让全部结果一次性铺开 */
+.trade-search .search-list { max-height: none; overflow-y: visible; }

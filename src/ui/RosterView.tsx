@@ -15,7 +15,6 @@ export function RosterView({ api }: { api: GameApi }) {
   const l = api.league!;
   const me = l.teams[l.userTeamId];
   const [sel, setSel] = useState<Player | null>(null);
-  const [showRot, setShowRot] = useState(true);
   const [dragPid, setDragPid] = useState<number | null>(null);
   const [dropPos, setDropPos] = useState<Pos | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -78,8 +77,6 @@ export function RosterView({ api }: { api: GameApi }) {
     for (const p of me.players) { p.min = null; p.usage = null; }
     api.tick();
   };
-  const depthIdx = (p: Player) => me.players.filter((q) => q.pos === p.pos).indexOf(p);
-
   // ---- v0.3.7 位置拖拽（v2.0 双位置：只能拖到该球员的 {主,副} 位置，主副互换） ----
   const onDragStart = (e: React.DragEvent, pid: number) => {
     e.dataTransfer.setData('text/plain', String(pid));
@@ -187,73 +184,16 @@ export function RosterView({ api }: { api: GameApi }) {
         })()}
       </div>
 
-      {/* 轮换与战术（v0.3.1 / v1.0 错位修复：不用 action-card 的 flex 布局，改用块级 rot-panel） */}
-      <div className="rot-panel" style={{ marginBottom: 10 }}>
-        <div className="action-title" style={{ cursor: 'pointer' }} onClick={() => setShowRot(!showRot)}>
-          ⏱ 轮换与战术 {showRot ? '▾' : '▸'}
-          {manual && <span className="tag-starter" style={{ marginLeft: 8 }}>自定义生效中</span>}
-        </div>
-        {showRot && (
-          <>
-            <div className="rot-toolbar">
-              <span className="spacer" />
-              <button className="btn sm" onClick={resetAll}>↺ 恢复自动轮换</button>
-            </div>
-            {Object.entries(posTotal).map(([pos, sum]) =>
-              sum > MIN_MAX ? (
-                <div className="warn-text" key={pos} style={{ marginTop: 4 }}>
-                  ⚠️ {POS_CN[pos]}位置自定义分钟合计 {Math.round(sum)} 超过 48：引擎会按比例优先满足，超出的部分不会兑现。
-                </div>
-              ) : null
-            )}
-            <div className="rot-grid rot-head">
-              <span />
-              <span>球员</span><span>位置</span><span>分钟/场（0-48）</span><span>球权权重（0-10）</span>
-            </div>
-            <div className="rot-grid-wrap">
-              {me.players.map((p) => {
-                const idx = depthIdx(p);
-                const auto = AUTO_MINUTES[Math.min(idx, AUTO_MINUTES.length - 1)];
-                return (
-                  <div className={`rot-grid rot-row ${p.min != null ? 'custom' : ''} ${injClass(p)}`} key={p.id}>
-                    <span className={`rc-ovr sm ${ovrClass(p.ovr)}`}>{p.ovr}</span>
-                    <span className="rot-name" title={`NBA 第 ${p.exp} 年 · 潜力 ${p.potential} 星 · 位置 ${p.pos}/${p.secPos}${p.injury ? ` · 🏥伤停${p.injury.games}场` : ''}`}>
-                      {p.name}{p.injury && <span className="injury-tag">🏥</span>}
-                    </span>
-                    <span className="rot-pos">{POS_CN[p.pos]}/{POS_CN[p.secPos]}</span>
-                    <span className="rot-min">
-                      <button className="btn sm" onClick={() => setMin(p, (p.min ?? auto) - 1)} disabled={(p.min ?? auto) <= 0}>−</button>
-                      <input
-                        type="number" min={0} max={48}
-                        value={p.min ?? ''}
-                        placeholder={String(auto)}
-                        title={p.min != null ? `自动档约 ${auto} 分钟` : '留空 = 按深度自动'}
-                        onChange={(e) => {
-                          const v = Number(e.target.value);
-                          if (e.target.value === '' || Number.isNaN(v)) { p.min = null; api.tick(); return; }
-                          setMin(p, v);
-                        }}
-                      />
-                      <button className="btn sm" onClick={() => setMin(p, (p.min ?? auto) + 1)} disabled={(p.min ?? auto) >= MIN_MAX}>+</button>
-                    </span>
-                    <span className="rot-usage">
-                      <input
-                        type="number" min={0} max={10}
-                        value={p.usage ?? ''}
-                        placeholder="自动"
-                        onChange={(e) => {
-                          if (e.target.value === '') { setUsage(p, null); return; }
-                          setUsage(p, Number(e.target.value));
-                        }}
-                      />
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
+      {/* v1.0.1：原「轮换与战术」面板已移除——分钟/球权在位置卡片里改，战术发起位置点位置标题即可。
+          这里只留一条状态与重置工具条。 */}
+      <div className="rot-bar" style={{ marginBottom: 10 }}>
+        <span className="dim">{manual ? '⚙️ 自定义分钟/球权生效中' : '⚙️ 自动轮换'}</span>
+        <span className="spacer" />
+        <button className="btn sm" onClick={resetAll}>↺ 恢复自动轮换</button>
       </div>
+      {Object.entries(posTotal).filter(([, sum]) => sum > MIN_MAX).map(([pos, sum]) => (
+        <div className="warn-text" key={pos}>⚠️ {POS_CN[pos]} 位置分钟合计 {Math.round(sum)} 超过 48，超出部分不会兑现</div>
+      ))}
 
       <div className="roster-cols">
         {POS_LIST.map((pos) => {

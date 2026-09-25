@@ -353,10 +353,33 @@ const COACH_BY_SEED = ['iron', 'locker', 'brand'] as const;
 //   < 80 重建：非常重视未来资产（选秀权、年轻球员），老将不值钱
 export type TeamPhase = 'contender' | 'retool' | 'rebuild';
 
-export function teamPhase(t: Team): TeamPhase {
+export function teamPhase(t: Team, l?: LeagueState): TeamPhase {
   // v2.6.2：用 valueOvr（位置无关）判定，避免玩家靠换位影响自己与对手的阶段定位
   const top5 = [...t.players].sort((a, b) => valueOvr(b) - valueOvr(a)).slice(0, 5);
   const avg = top5.length ? top5.reduce((s, p) => s + valueOvr(p), 0) / top5.length : 0;
+  const gp = t.win + t.loss;
+
+  // v1.0.1（用户指定）①：**打满 40 场后，落后本分区第 8 名 ≥10 个胜场 → 直接重建**（基本无缘季后赛）。
+  //   需要联盟上下文；没传 l 的调用点会自动跳过这条（只用于纯展示的旧调用）。
+  if (l && gp >= 40) {
+    const sameConf = l.teams
+      .filter((x) => x.conf === t.conf)
+      .sort((a, b) => (b.win - b.loss) - (a.win - a.loss) || b.win - a.win);
+    const eighth = sameConf[7]; // 分区第 8 名 = 季后赛门槛线
+    if (eighth && eighth.id !== t.id && eighth.win - t.win >= 10) return 'rebuild';
+  }
+
+  // v1.0.1（用户指定）②：**打满 20 场后，定位改由战绩修正**——胜率不足 20% 直接判为重建。
+  //   理由：开季前的阵容评分只是纸面实力，打满 20 场（约 1/4 赛季）后战绩才是真实定位。
+  if (gp >= 20) {
+    const wr = t.win / gp;
+    if (wr < 0.20) return 'rebuild';                                  // 胜率 < 20% → 直接重建
+    if (wr >= 0.55 || (wr >= 0.45 && avg > 85)) return 'contender';   // 战绩够好（或强阵+接近五成）→ 争冠
+    if (wr >= 0.40 || avg >= 80) return 'retool';                     // 其余 → 补强
+    return 'rebuild';
+  }
+
+  // 前 20 场（含开季 0 场）：样本太小，仍按阵容实力判定
   if (avg > 85) return 'contender';
   if (avg >= 80) return 'retool';
   return 'rebuild';
@@ -955,7 +978,7 @@ export function evaluateTrade(
   //   当下战力不参与打折——否则会出现"更强且更年轻"的球员被算成等价甚至更便宜的荒谬结果
   //   （案例：争冠队眼中 87/24 岁的莫布利 3.3×0.75=2.5 ≈ 85/29 岁的萨博尼斯 2.0×1.2=2.4）。
   //   现在：争冠 未来溢价×0.6（不愿为潜力付钱、也不过分计较年龄）、补强 ×0.9、重建 ×1.35。
-  const phase = teamPhase(ai);
+  const phase = teamPhase(ai, l);
   const wPlayer = (p: Player) => phaseValue(p, phase);
   const wPick = (v: number) => v * phasePickWeight(phase);
   // v2.6.2：队内前二当家要价 ×1.5（见 TOP2_PREMIUM）
@@ -1285,7 +1308,7 @@ export function searchTrades(
 
   const out: TradeSuggestion[] = [];
   // v2.5.1：搜索结果的"你赚/你亏"改用**我方阶段偏好折算**后的价值（与能否成交口径一致）
-  const myPhase = teamPhase(me);
+  const myPhase = teamPhase(me, l);
   const myVal = (p: Player) => phaseValue(p, myPhase);
   for (const ai of l.teams) {
     if (ai.id === me.id) continue;
@@ -1405,14 +1428,14 @@ export function searchTradeTargets(
   }
   if (!groups.size) return [];
 
-  const myPhase = teamPhase(me);
+  const myPhase = teamPhase(me, l);
   const myVal = (p: Player) => phaseValue(p, myPhase);
   const out: TargetSuggestion[] = [];
 
   for (const [aiId, want] of groups) {
     const ai = l.teams[aiId];
     if (!ai) continue;
-    const aiPhase = teamPhase(ai);
+    const aiPhase = teamPhase(ai, l);
     // 对方对"我要的东西"的估价（他们索要多少）；v2.6.2：队内前二当家按 1.5 倍要价——
     //   反向搜索的筹码剪枝窗口必须跟着放大，否则会漏掉"需要多付才能换来当家"的可行方案。
     const aiTop2 = top2Ids(ai);
