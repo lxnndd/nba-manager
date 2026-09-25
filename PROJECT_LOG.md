@@ -2,7 +2,8 @@
 
 > 用途：把本项目的**全部对话成果**压缩成一份自包含文档。新会话只需读这份文件 + 仓库源码，
 > 即可无缝接手开发，无需重看历史对话。
-> 最后更新：v2.7.1（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（私有）。
+> 最后更新：v1.0.0 公测版（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（私有）；
+> 已发布 Release：**v1.0.0 公测版**（含 `NBA-Manager-1.0.0.exe`）。
 
 ---
 
@@ -12,15 +13,24 @@
 |---|---|
 | 本地路径 | `C:\Users\10709\Desktop\AI\nba-manager` |
 | 技术栈 | Electron 33 + React 19 + TypeScript 5.7 + Vite 6（纯离线单机，无后端） |
-| 当前版本 | **2.7.1**（package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
-| 交付产物 | `release\NBA-Manager-2.7.1.exe`（便携版，双击即玩，89.65 MB） |
+| 当前版本 | **1.0.0**（公测版；package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
+| 交付产物 | `release\NBA-Manager-1.0.0.exe`（便携版，双击即玩，89.65 MB）+ GitHub Release v1.0.0 |
 | 目标用户 | 用户的弟弟（玩英文名单的真实 NBA 模式）；玩家=一支 NBA 球队的总经理 |
 | 名单模式 | `real`（2K27 真实名单，主力玩法）/ `fictional`（虚构名单，自测基线） |
 | 存档 | `%APPDATA%\NBA经理\saves\auto.json`（Electron）或 localStorage 兜底；`SAVE_VERSION = 11` |
 | 自测 | `src/engine/selfTest.ts`（虚构 + 真实双跑，390+ 断言，全绿才发版） |
-| 本版主题 | 背景 **5 秒**轮换 + **游戏内也能看见照片** · 数据榜去掉出场门槛（真正实时）· 联盟界面居中 + 大按钮 · **战术发起位置并入位置卡片** · 风格/执教/羁绊可点开详情 · 继续清理说明性文字 |
+| 本版主题 | **1.0.0 公测版发布**：真实 NBA 照片背景（50 张 / 5 秒 / 游戏内可见）· 阵容卡片改造（时间球权入卡片 / 去薪资 / **拖动排序**）· 修复主菜单切图闪黑 · 数据榜实时全量 · 联盟居中大按钮 · 已上传 GitHub |
 
-**本版（v2.7.1）各档案章节更新要点**
+**本版（v1.0.0）各档案章节更新要点**
+
+| 档案章节 | 更新要点 |
+|---|---|
+| §3 需求演化史 | 新增 v1.0.0 行（公测版：卡片改造 + 背景渐变修复 + 发布） |
+| §9 验证链 | 新增 **GitHub 发布步骤**（本机 github.com 被阻断 → 用 `tools/push-via-api.mjs` 走 API 推送） |
+| §10 经验 | "CSS 高优先级 :not() 会误伤新加的兄弟类名""版本号回退时 prune 不能按版本排序" |
+| §1 版本号 | 2.7.1 → **1.0.0**（用户指定：公测版从 1.0.0 起） |
+
+**上一版（v2.7.1）各档案章节更新要点**
 
 | 档案章节 | 更新要点 |
 |---|---|
@@ -179,6 +189,8 @@ node tools/ui-smoke.mjs 9333
 | **v2.7.0** | ①「进行ui美化」②「开始界面的图片选用真实nba比赛的照片50张，1s轮换一次」③「轮换与战术界面感觉空的地方太大，而且单行太窄」④「自由球员市场应该把列表居中而且放大到全屏」⑤「新秀的界面同理，筛选按钮都放到右上角」⑥「去除所有界面带有说明性的文字，介绍规则应该在主菜单的开始新游戏后、在选择你的球队前加入两个选项，新手则把规则全部呈现出来，老手则进入选择球队界面」⑦「删除导出存档和导入存档功能，不需要」 | ①新增 `tools/fetch-nba-photos.ps1`：爬 NBA 官网各版块页提取 `cdn.nba.com/manage/...` 官方照片 → System.Drawing cover 裁剪压缩为 1920×1080/q80 → `src/assets/backdrops/nba-01..50.jpg`（50 张 13.7 MB，旧 10 张 Pexels 图已删）；`TitleScreen` 轮播 20s → **1s**，双层 `.title-bg`/`.title-bg-alt` 交叉淡入 + `new Image()` 预加载 ②`TitleScreen` 新增 `guide`（我是新手 / 我玩过）与 `rules`（7 板块规则总览）两个阶段，`doNew()` 先进 guide；规则类文字从各界面集中到此 ③CSS：`.view-full` 全屏铺满 + `.card-head`/`.head-tools`（标题在左、筛选右上）+ `.fa-row`/`.db-row` 加大行距字号 + `.rot-grid` 列宽 40/2fr/54/1.8fr/1.4fr、`.rot-grid-wrap` max-height 340px→64vh ④删除 `exportSave/importSave`（`useGame.ts`、`gm.d.ts`、`electron/main.cjs` 的 `file:export`/`file:import`、`preload.cjs`）⑤`ui-smoke.mjs` 增加分流页与规则页断言、筛选按钮选择器 `.fa-filter`→`.head-tools` |
 
 | **v2.7.1** | ①「5s轮换，现在太快了，这些背景玩游戏的时候也能看见」②「球员数据榜还是不能实时同步，我都打了3天还是没数据，不要加出场大于8场这种限制，括号里面也去了，这种说明性文字少出现」③「联盟界面的也都居中，按钮变大一点，现在太小了」④「乱换战术界面，我现在想法是和下面的卡片结合起来」⑤「上面的风格执教和羁绊要能点开查看详情」 | ①背景轮播 1s → **5s**；把 `BACKDROPS`/轮播逻辑抽到新文件 `src/ui/backdrops.ts`（`useBackdropRotation()`），`App.tsx` 加 `<GameBackdrop>` —— `.game-bg-wrap` 固定在底层 `opacity:.2` 控整体透明度、内层两层做交叉淡入，**游戏内因此也能看见照片** ②`LeagueView` 改为 `leaders(l, stat, 0, poMode)`（去掉常规赛 8 场 / 季后赛 1 场门槛），`.leaders-count` 去掉括号说明，并删掉"（季后赛独立统计…）/（数据实时更新）"；实测开季榜单从 0 → **450 人**（全联盟） ③`LeagueView` 加 `view-full league-view`，CSS 让 `.tabs`/`.conf-grid`/`.leaders-box` 居中、`.tab` 15px/9×24、`.chip-btn` 与 `.btn.sm` 加大 ④删掉 `.rot-toolbar` 里的发起位按钮组，改为**点位置列标题**（`.pos-head` + `.initiator` 高亮 + 🎯）直接设置 `me.initiator` ⑤球队气质的风格/执教/羁绊 chip 改为按钮 → `.info-modal` 详情弹窗（风格与执教列出全部选项并标出当前所选；羁绊列出每组的实算加成与相关球员名单） |
+
+| **v1.0.0**（公测版） | ①「现在切换背景会黑一会，要的是渐变到下一张，游戏里是对的，但是主菜单有问题」②「把球员上场时间和权值加到下面的卡片里，把卡片做大点来适应新加入的，删掉卡片上的薪资，调整上下的按钮去除，改为拖动来进行」③「完成这些之后这一版上线公测，版本号为1.0.0，上传github并删除之前的版本」 | ①主菜单闪黑有两个原因：`.title-bg-alt` 的 class **不匹配** v1.1 段那条高优先级的 `.title-screen > *:not(.title-bg):not(.title-bg-overlay)` 规则，被强制成 `position:relative` 掉进布局流；且 `.title-bg` 原本写的是 `transition: background-image`（该属性无法过渡）。修法：两条规则都补上 `:not(.title-bg-alt)`、过渡改为 `opacity .55s` ②`RosterView` 位置卡片：把「时间」「球权」输入搬进 `.rc-foot`（`.rc-field` + `.rf-btn`），删掉 `.rc-right` 的薪资与 `.move-btns` 的 ↑↓；改为**拖动排序** —— 卡片自身加 `onDragOver/onDrop`（`stopPropagation`），同列拖动 = 重排，拖到另一列 = 主副互换 ③版本号 2.7.1 → **1.0.0**（公测），打包 + ui-smoke 全绿后发布：`gh api` 建 tag `v1.0.0` + `gh release create` 上传 exe。**注意**：`tools/prune-old-releases.mjs` 原按版本号排序，遇到版本号回退（2.7.1 → 1.0.0）会把刚打出的新版误删，已改为**按构建时间**排序 |
 
 **迭代工作方式（继续保持）**：用户（转述弟弟反馈）给需求 → 直接实现 → 全量验证链 → 打包 exe → 更新 Changelog/使用说明 → 交付产物路径 + 变更说明；涉及行为改动时在 `使用说明.txt` 顶部加版本段。
 ⚠️ v2.6.0 起用户要求"**每次测试时间太长，只测试改的功能**"：优先跑 `tsc` + 针对本次改动的定向脚本（`tools/temp-*.ts|mjs`，用完删除），全量 selfTest / ui-smoke 只在发版前或改动涉及全局数值时再跑。
@@ -592,7 +604,20 @@ faDay/faOffers/poffExitShown/pendingEvents/draft → **v2.5.0：`poGp/poStats` �
    自动完成 + 进入市场）
 6. portable exe 冒烟：`$env:DSH_AUTOQUIT_MS='9000'; Start-Process release\NBA-Manager-x.y.z.exe -Wait`
 7. 四路径 `%SystemDrive%` 残留检查（§10.6）
-8. `node tools/prune-old-releases.mjs`（保留最近 2 个版本 exe）；更新 Changelog/使用说明/版本号
+8. `node tools/prune-old-releases.mjs`（**v2.6.4 起只保留最新 1 个版本 exe**，v1.0.0 起按**构建时间**排序）；
+   更新 Changelog/使用说明/版本号
+9. **GitHub 发布（v1.0.0 起）**：本机 `github.com:443` 被阻断（DNS 返回的 IP 不通；换 IP 可通但改 hosts
+   需要管理员权限），所以 `git push` 用不了；而 `api.github.com` 与 `uploads.github.com` 均可用、`gh` 已认证。
+   流程（`tools/push-via-api.mjs` 走 Git Data API 等价于一次 push）：
+   ```
+   git add -A && git commit -m "..."        # 先本地提交
+   node tools/push-via-api.mjs --dry        # 看差异：待推提交数 / 需上传 blob 数
+   node tools/push-via-api.mjs              # 逐提交上传 blob → 建 tree → 建 commit → 更新 ref
+   gh api repos/lxnndd/nba-manager/git/refs -f ref="refs/tags/vX.Y.Z" -f sha=<远端 main sha>
+   gh release create vX.Y.Z "release\NBA-Manager-X.Y.Z.exe" --title "..." --notes-file <notes.md>
+   ```
+   注意：API 生成的 commit sha 可能与本地不同（时间戳规范化），但脚本会校验并报告 ——
+   **tree 一致即内容完全一致**；脚本也能处理"远端 sha 不在本地对象库"（按 tree 反查本地提交）。
 
 **版本号修改三处**：`package.json`（**必须用 node `fs.writeFileSync`**，PS 会写 BOM 导致 builder 报错）、
 `src/App.tsx`（顶栏 ×2）、`src/ui/ChangelogModal.tsx`（VERSION + ITEMS），另加 `使用说明.txt` 顶部版本段与尾部 exe 名。
@@ -742,6 +767,16 @@ faDay/faOffers/poffExitShown/pendingEvents/draft → **v2.5.0：`poGp/poStats` �
     （页面没崩、也没报错，就是被重渲染拖慢）。把轮播 state 收进 `<GameBackdrop />` 子组件后
     全部恢复。**通用规则：高频定时器 state 必须放在最小的叶子组件里**；看到"多步操作集体超时
     但无 console 错误"，先怀疑有没有全局级的高频重渲染源。
+28. **高优先级 `:not()` 选择器会误伤"后来加的兄弟类名"（v1.0.0 实测）**：v1.1 段写过
+    `.title-screen > *:not(.title-bg):not(.title-bg-overlay) { position: relative; z-index: 1 }`，
+    后来加 `.title-bg-alt` 做交叉淡入——它**不匹配** `.title-bg`，于是被这条特异性更高的规则强制成
+    `relative`，淡入层掉进布局流，表现就是"主菜单切图黑一下"（游戏内那套没这写法，所以只坏一半）。
+    **教训：给老组件加"同族新类名"时，先 grep 所有 `:not(.老类名)` 这类排除式选择器**；
+    另外 `transition: background-image` 是**无效过渡**（浏览器不支持该属性动画），换图只能用 opacity/transform。
+29. **版本号回退时，别用版本号排序做清理（v1.0.0 实测）**：`prune-old-releases.mjs` 原按 semver 降序
+    保留"最新"，而公测版把 2.7.1 回退成 1.0.0 —— 脚本于是把刚构建出来的 1.0.0 当旧版删了。
+    **改为按文件 mtime 排序**（保留"最近构建的"），与"更新就删旧的"这个真实意图一致。
+    通用规则：**"新旧"的判据要用生成时间，不要用可能回退的编号。**
 
 ---
 
