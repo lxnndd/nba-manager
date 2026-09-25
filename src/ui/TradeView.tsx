@@ -281,7 +281,7 @@ export function TradeView({ api }: { api: GameApi }) {
         <span className="pl-pos">{POS_CN[p.pos]}{p.secPos && p.secPos !== p.pos ? `/${POS_CN[p.secPos]}` : ''}</span>
         <span className="pl-stats">{perGameLine(p)}</span>
         <span className="pl-salary">{money(p.salary)}</span>
-        <span className="pl-val" title="交易价值（75 能力=1.0，每 +10 翻倍；含潜力成长/年龄折损±合同性价比）">估值 {tradeValue(p).toFixed(1)}</span>
+        <span className="pl-val" title="交易价值：75 能力=1.0、每 +10 翻倍，含潜力成长/年龄折损±合同性价比；能力档位 <75 半价 / 75-79 八折 / 85-89 涨 20% / ≥90 涨 40%；按球员的基准位置计算，与你在阵容里把他摆在哪个位置无关">估值 {tradeValue(p).toFixed(1)}</span>
         {isMine && (
           <button
             className={`lock-btn ${isLocked ? 'on' : ''}`}
@@ -353,7 +353,7 @@ export function TradeView({ api }: { api: GameApi }) {
         <div className="trade-col">
           <div className="col-head">
             <span className="strong">我送出的（{myGive.length} 人{givePicks.length ? ` + ${givePicks.length} 签` : ''}）</span>
-            <span className="dim">🔒 点击行尾锁图标可锁定球员（锁定后 AI 不会为他要价）</span>
+          <span className="dim"></span>
           </div>
           <div className="pick-list">
             {[...me.players].sort((a, b) => b.ovr - a.ovr).map((p) =>
@@ -412,7 +412,7 @@ export function TradeView({ api }: { api: GameApi }) {
           <button className="btn primary" disabled={!verdict?.accept} onClick={confirmTrade}>
             ✓ 确认交易（对方将对等接受后执行）
           </button>
-          <span className="dim">点击球员即实时预检；换人后预检自动刷新</span>
+          <span className="dim"></span>
         </div>
         {verdict && (
           <div className={`verdict ${verdict.accept ? 'ok' : 'no'}`}>
@@ -439,10 +439,6 @@ export function TradeView({ api }: { api: GameApi }) {
         </div>
         {searchMode === 'give' ? (
           <>
-            <div className="mini-lines" style={{ marginBottom: 8 }}>
-              勾选自己队里 1 名或多名球员 / 选秀权（可多选，AI 常常想要打包），点搜索即可列出
-              全联盟可行的交易组合；标「需追加」的方案 = 对方还想多要你几个人，一键即可填入筹码或直接成交。
-            </div>
             <div className="btn-row">
               <button className="btn primary" disabled={searching} onClick={runSearch}>
                 {searching ? '⏳ 搜索中…' : '🔍 搜索可行交易'}
@@ -453,11 +449,6 @@ export function TradeView({ api }: { api: GameApi }) {
           </>
         ) : (
           <>
-            <div className="mini-lines" style={{ marginBottom: 8 }}>
-              先在右侧「<b>我要的</b>」里点选你想要的球员或选秀权（可多选、可跨队），系统会反推
-              <b>各队愿意接受的报价</b>（你需要送出哪些球员/签），点「📨 发送报价」即成交。
-              想换核心球员却搜不到方案？多半是他是非卖品，或你的筹码身价不够（试试加首轮签）。
-            </div>
             <div className="btn-row">
               <button className="btn primary" disabled={searching} onClick={runTargetSearch}>
                 {searching ? '⏳ 计算中…' : '🎯 生成报价方案'}

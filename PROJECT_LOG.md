@@ -2,7 +2,7 @@
 
 > 用途：把本项目的**全部对话成果**压缩成一份自包含文档。新会话只需读这份文件 + 仓库源码，
 > 即可无缝接手开发，无需重看历史对话。
-> 最后更新：v2.6.0（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（私有）。
+> 最后更新：v2.7.1（2026-09）。仓库：**https://github.com/lxnndd/nba-manager**（私有）。
 
 ---
 
@@ -12,15 +12,65 @@
 |---|---|
 | 本地路径 | `C:\Users\10709\Desktop\AI\nba-manager` |
 | 技术栈 | Electron 33 + React 19 + TypeScript 5.7 + Vite 6（纯离线单机，无后端） |
-| 当前版本 | **2.6.0**（package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
-| 交付产物 | `release\NBA-Manager-2.6.0.exe`（便携版，双击即玩） |
+| 当前版本 | **2.7.1**（package.json / `src/App.tsx` 顶栏 / `src/ui/ChangelogModal.tsx`） |
+| 交付产物 | `release\NBA-Manager-2.7.1.exe`（便携版，双击即玩，89.65 MB） |
 | 目标用户 | 用户的弟弟（玩英文名单的真实 NBA 模式）；玩家=一支 NBA 球队的总经理 |
 | 名单模式 | `real`（2K27 真实名单，主力玩法）/ `fictional`（虚构名单，自测基线） |
 | 存档 | `%APPDATA%\NBA经理\saves\auto.json`（Electron）或 localStorage 兜底；`SAVE_VERSION = 11` |
-| 自测 | `src/engine/selfTest.ts`（虚构 + 真实双跑，380+ 断言，全绿才发版） |
-| 本版主题 | **反向报价搜索器（我想要谁 → 算我要付什么）** · **选秀权初始价值 1.5/1.2/1.0 + 0.4/0.3/0.2** · 交易估值拆「当下战力 / 未来溢价」 · 球员锁定 · 三状态 · 季后赛数据分离 |
+| 自测 | `src/engine/selfTest.ts`（虚构 + 真实双跑，390+ 断言，全绿才发版） |
+| 本版主题 | 背景 **5 秒**轮换 + **游戏内也能看见照片** · 数据榜去掉出场门槛（真正实时）· 联盟界面居中 + 大按钮 · **战术发起位置并入位置卡片** · 风格/执教/羁绊可点开详情 · 继续清理说明性文字 |
 
-**本版（v2.6.0/v2.5.1）各档案章节更新要点**
+**本版（v2.7.1）各档案章节更新要点**
+
+| 档案章节 | 更新要点 |
+|---|---|
+| §3 需求演化史 | 新增 v2.7.1 行（六处反馈修正） |
+| §8 UI 地图 | 新增 `src/ui/backdrops.ts`（标题屏与游戏内共用的背景轮换）；`RosterView` 的 `pos-head` 可点选战术发起位置；`.info-modal` 详情弹窗 |
+| §10 经验 | "背景铺底不能盖住内容（wrap 控透明度、内层控交叉淡入）" |
+
+**上一版（v2.7.0）各档案章节更新要点**
+
+| 档案章节 | 更新要点 |
+|---|---|
+| §3 需求演化史 | 新增 v2.7.0 行（UI 美化 7 项） |
+| §4 数据管线 | 背景图改为 `tools/fetch-nba-photos.ps1`（NBA 官网官方照片 → 50 张 1920×1080） |
+| §8 UI 地图 | 标题屏加 `guide`/`rules` 阶段；`.view-full` 全屏列表；筛选按钮统一放 `.card-head .head-tools` |
+| §10 经验 | "规则说明集中一处，界面只留功能标签" |
+
+**上一版（v2.6.4）各档案章节更新要点**
+
+| 档案章节 | 更新要点 |
+|---|---|
+| §3 需求演化史 | 新增 v2.6.4 行（usage 只影响持球、不影响出手） |
+| §5.2 模拟 | 球权段补注：`uw(p)` 同时乘进**持球权重**与**接球出手权重** |
+| §10 经验 | "自定义参数生效面覆盖不全"（用户按 UI 语义用，实现只覆盖了一半链路） |
+
+**上一版（v2.6.3）各档案章节更新要点**
+
+| 档案章节 | 更新要点 |
+|---|---|
+| §3 需求演化史 | 新增 v2.6.3 行（数据榜不再截断 20 人） |
+| §7/§8 地图 | `leaders(l, stat, minGp, playoff, limit = Infinity)`；`LeagueView` 数据榜加 `.leaders-count` 人数行 + `.leaders-scroll` 滚动容器 |
+
+**上一版（v2.6.2）各档案章节更新要点**
+
+| 档案章节 | 更新要点 |
+|---|---|
+| §3 需求演化史 | 新增 v2.6.2 行（前二当家溢价 + 估值与位置脱钩） |
+| §5.7 交易 | **`TOP2_PREMIUM = 1.5` + `top2Ids`**、**`gen.valueOvr` 位置无关估值口径** |
+| §7 源码地图 | `gen.ts` 新增 `valueOvr`；`league.ts` 新增 `TOP2_PREMIUM/top2Ids`，`tradeEff/tradeValue/phaseValue/teamPhase/coreBlockReason` 改用 `valueOvr` |
+| §10 经验 | "改 ovr 造 mock 遇到基准制口径会集体失真""位置无关要用生成期不变量" |
+
+**上一版（v2.6.1）各档案章节更新要点**
+
+| 档案章节 | 更新要点 |
+|---|---|
+| §3 需求演化史 | 新增 v2.6.1 行（核心门槛 + 能力档位系数 + 中国新秀 + 国籍显示） |
+| §5.7 交易 | **`CORE_OVR = 85` 核心门槛 `coreBlockReason`**、**`ovrValueWeight` 能力档位系数** |
+| §7 源码地图 | `league.ts` 新增 `CORE_OVR/coreBlockReason/ovrValueWeight`；`gen.ts` 新增 `DRAFT_CN_BONUS` |
+| §10 经验 | "硬门槛与估值系数互补""档位系数要成对设计（压下限 + 抬上限）" |
+
+**上一版（v2.6.0/v2.5.1）各档案章节更新要点**
 
 | 档案章节 | 更新要点 |
 |---|---|
@@ -118,8 +168,34 @@ node tools/ui-smoke.mjs 9333
 
 | **v2.6.0** | ①交易搜索器加「选定对方球员 → 给我发报价」的反向搜索 ②未来三年首轮签初始价值 1.5 / 1.2 / 1，次轮 0.4 / 0.3 / 0.2 | 引擎 `searchTradeTargets(l, wantPids, wantPickIdx)`（目标按现属球队分组 → 价值剪枝 → 单人/单人+签/两人/两人+签四类组合 → 全部经 `evaluateTrade` 校验 → 按**我方阶段折算净收益**排序），返回 `TargetSuggestion extends TradeSuggestion {myGiveVal,myGetVal}`；`pickValue` 改为 `PICK_BASE = {1:[1.5,1.2,1.0], 2:[0.4,0.3,0.2]}` × 战绩质量系数（首轮 0.6-1.4、次轮 0.8-1.2，中性=1.0）；UI 搜索器加模式切换 + 「🎯 生成报价方案」+「📨 发送报价」（目标在右栏勾选，可跨队） |
 
+| **v2.6.1** | ①「每个球队的 85 以上都是中流砥柱，想要换取，也得用 85 以上去置换——争冠球队怎么可能送出自己的组队核心」②「新秀国籍里美国也标出来」③「加强中国新秀，平均加 10 能力」④「应该降低添头的价值，75 以下对半砍，75-80 降 20%」⑤「85-90 涨 20%，90 以上涨 40%」 | ①`CORE_OVR = 85` + `coreBlockReason(ai, want, give)`：核心数量门槛（对方送 N 个核心，你必须送 ≥N 个）+ 不许降级（85 换不走 87）+ 同档不许拿老换少；插在 `evaluateTrade` 的**薪资/签冻结检查之后、估值判定之前**，因此所有交易入口（正向/反向搜索、AI 主动报价、AI 间交易）自动生效 ②`ovrValueWeight(ovr)`：<75 ×0.5 / 75-79 ×0.8 / 80-84 ×1.0 / 85-89 ×1.2 / ≥90 ×1.4，同时乘在 `tradeValue`（市场价）与 `phaseValue`（决策价）上 ③`genRookie(rng, tier, idSeq, ovrBonus = 0)` + `DRAFT_CN_BONUS = 10`：中国新秀在**生成期**抬 target（技能与总评同步；`gauss(rng)` 仍只调一次 → 不扰动随机序，其余 77 人逐位不变），实测平均 +9.17 ④新秀榜 `DraftView` 与选秀面板 `OffseasonView` 的国籍列改为**一律显示**（含美国）；自由市场列表与球员详情维持"非美国才显示"（用户指定只改选秀相关两处）⑤`TradeView` 的估值 tooltip 同步新口径 |
+
+| **v2.6.2** | ①「球队对于自己前两位球员的交易欲望不高，价值的 1.5 倍才能打动」②「换位置不变价值，这个不太公平」（追问后用户选定：**只把交易价值与位置脱钩**） | ①`TOP2_PREMIUM = 1.5` + `top2Ids(t)`（按 OVR 降序取前 2，同分按 id 稳定）：`evaluateTrade` 里 AI 送出的当家球员按 1.5 倍计入 `aiGiveVal`（要价），拒绝理由写明"XX 是队内前二当家：要价按 1.5 倍计"；`searchTradeTargets` 的 `wantVal` 同步 ×1.5（否则筹码剪枝窗口偏小、会漏掉可行方案）②`gen.valueOvr(p)`：位置无关的估值口径 = `baseOvr + calcOvr(skills) − calcOvr(baseSkills)`（换位只改 attrs 与当前 ovr，**不动 skills/baseSkills/baseOvr** → 该值恒定，缺 skills 的部分构造对象回退 `p.ovr`）；`tradeEff/tradeValue/phaseValue`、档位系数 `ovrValueWeight`、核心判定 `coreBlockReason`、`top2Ids`、`teamPhase` 全部改用它。实测 450 人次「主→副」换位：374 人次总评变化（位置适配保留），**交易估值变化 0 人次**、核心身份翻转 0 人次 |
+
+| **v2.6.3** | 「球员数据榜现在只能看见 20 人，现在要看到所有人」 | `leaders()` 去掉写死的 `rows.slice(0, 20)`，签名加 `limit = Infinity` → 默认返回**全部**上榜球员（需要限量时显式传参，`selfTest` 只取 `[0]` 不受影响）；`LeagueView.leadersTable` 外包 `.leaders-box`（新增 `.leaders-count` 人数行"共 N 人上榜"）+ `.leaders-scroll` 滚动容器，`theme.css` 补 `.leaders-scroll thead th` 吸顶。实测真实名单模拟 60 天：得分榜 **379 人 = 全联盟出场 ≥8 场人数**（此前恒为 20），`minGp` 门槛与显式 `limit` 均正常 |
+
+| **v2.6.4** | 「我拉满中锋的球权，压低了其他位置的球权，但是出手次数很低，是什么问题」 | 根因：自定义 `usage` 只在**持球人**选择里生效（`hw` 里 `× (0.35 + usage*0.13)`），而"出手者"那段（持球人自投 35%，其余 65% 由 `tend[pos] × (0.8+three/180) × ability^1.4 × coreBoost` 竞争）**完全没读 usage** → 拉满只换了带球人。修法：把同一系数抽成 `uw(p) = usage != null ? 0.35 + usage*0.13 : 1`，**同时乘进 `w2`（接球出手权重）**；留空者恒为 1 → 默认比赛与既有基线逐位不变。实测（BOS 14 场，首发中锋米切尔·罗宾逊 O80）：默认 7.6 次出手/场 → 中锋 10 + 其余首发 0 = **14.4 次**（18.0 分）→ 只设中锋 10 = 10.4 次 → 中锋设 0 = 3.3 次 |
+
+| **v2.7.0** | ①「进行ui美化」②「开始界面的图片选用真实nba比赛的照片50张，1s轮换一次」③「轮换与战术界面感觉空的地方太大，而且单行太窄」④「自由球员市场应该把列表居中而且放大到全屏」⑤「新秀的界面同理，筛选按钮都放到右上角」⑥「去除所有界面带有说明性的文字，介绍规则应该在主菜单的开始新游戏后、在选择你的球队前加入两个选项，新手则把规则全部呈现出来，老手则进入选择球队界面」⑦「删除导出存档和导入存档功能，不需要」 | ①新增 `tools/fetch-nba-photos.ps1`：爬 NBA 官网各版块页提取 `cdn.nba.com/manage/...` 官方照片 → System.Drawing cover 裁剪压缩为 1920×1080/q80 → `src/assets/backdrops/nba-01..50.jpg`（50 张 13.7 MB，旧 10 张 Pexels 图已删）；`TitleScreen` 轮播 20s → **1s**，双层 `.title-bg`/`.title-bg-alt` 交叉淡入 + `new Image()` 预加载 ②`TitleScreen` 新增 `guide`（我是新手 / 我玩过）与 `rules`（7 板块规则总览）两个阶段，`doNew()` 先进 guide；规则类文字从各界面集中到此 ③CSS：`.view-full` 全屏铺满 + `.card-head`/`.head-tools`（标题在左、筛选右上）+ `.fa-row`/`.db-row` 加大行距字号 + `.rot-grid` 列宽 40/2fr/54/1.8fr/1.4fr、`.rot-grid-wrap` max-height 340px→64vh ④删除 `exportSave/importSave`（`useGame.ts`、`gm.d.ts`、`electron/main.cjs` 的 `file:export`/`file:import`、`preload.cjs`）⑤`ui-smoke.mjs` 增加分流页与规则页断言、筛选按钮选择器 `.fa-filter`→`.head-tools` |
+
+| **v2.7.1** | ①「5s轮换，现在太快了，这些背景玩游戏的时候也能看见」②「球员数据榜还是不能实时同步，我都打了3天还是没数据，不要加出场大于8场这种限制，括号里面也去了，这种说明性文字少出现」③「联盟界面的也都居中，按钮变大一点，现在太小了」④「乱换战术界面，我现在想法是和下面的卡片结合起来」⑤「上面的风格执教和羁绊要能点开查看详情」 | ①背景轮播 1s → **5s**；把 `BACKDROPS`/轮播逻辑抽到新文件 `src/ui/backdrops.ts`（`useBackdropRotation()`），`App.tsx` 加 `<GameBackdrop>` —— `.game-bg-wrap` 固定在底层 `opacity:.2` 控整体透明度、内层两层做交叉淡入，**游戏内因此也能看见照片** ②`LeagueView` 改为 `leaders(l, stat, 0, poMode)`（去掉常规赛 8 场 / 季后赛 1 场门槛），`.leaders-count` 去掉括号说明，并删掉"（季后赛独立统计…）/（数据实时更新）"；实测开季榜单从 0 → **450 人**（全联盟） ③`LeagueView` 加 `view-full league-view`，CSS 让 `.tabs`/`.conf-grid`/`.leaders-box` 居中、`.tab` 15px/9×24、`.chip-btn` 与 `.btn.sm` 加大 ④删掉 `.rot-toolbar` 里的发起位按钮组，改为**点位置列标题**（`.pos-head` + `.initiator` 高亮 + 🎯）直接设置 `me.initiator` ⑤球队气质的风格/执教/羁绊 chip 改为按钮 → `.info-modal` 详情弹窗（风格与执教列出全部选项并标出当前所选；羁绊列出每组的实算加成与相关球员名单） |
+
 **迭代工作方式（继续保持）**：用户（转述弟弟反馈）给需求 → 直接实现 → 全量验证链 → 打包 exe → 更新 Changelog/使用说明 → 交付产物路径 + 变更说明；涉及行为改动时在 `使用说明.txt` 顶部加版本段。
 ⚠️ v2.6.0 起用户要求"**每次测试时间太长，只测试改的功能**"：优先跑 `tsc` + 针对本次改动的定向脚本（`tools/temp-*.ts|mjs`，用完删除），全量 selfTest / ui-smoke 只在发版前或改动涉及全局数值时再跑。
+🧹 v2.6.4 起用户要求"**之后也要更新就把旧的删了**"，并进一步明确"**只在自己文件夹下存放，不要超出**"
+   （2026-09-20 共清掉 AI 根目录约 253 MB：2.6.0/2.6.3 旧版 exe、4 份旧说明副本、过期文档、
+   25 张 ui-smoke 截图、`%SystemDrive%` 残留目录、3 份旧存档）：
+   - **所有产物只留在项目自己的文件夹内**：打包产物 = `nba-manager\release\NBA-Manager-<version>.exe`，
+     使用说明就是项目里的 `使用说明.txt`；**绝不往上级目录（AI 根目录 / 桌面）复制或另存任何文件**；
+   - `npm run dist` = `vite build` → `electron-builder` → `prune-old-releases.mjs`
+     （**release 只留最新 1 个 exe**，默认 keep 已由 2 改为 1）；
+   - 曾一度加过"自动同步一份到桌面"的 `tools/sync-desktop.mjs`（以及 `npm run sync`），
+     因违反"不要超出"**已删除**，不要重新引入这类"往外复制"的步骤；
+   - **根因修复**：`tools/ui-smoke.mjs` 的截图此前硬编码写到 `C:/Users/10709/Desktop/AI/`
+     （那 25 张 png 的真正来源），现已改写到项目内 `.test-out/ui-smoke/`（`.gitignore` 覆盖），
+     冒烟不再污染项目外目录；
+   - **项目本体（源码 / 资源 / 配置 / 底层设定）一律不动**，AI 文件夹里其他项目
+     （声学论文 / 劫火八荒 / 洛克王国 / 海洋调查等）的文件绝对不要碰。
 
 ---
 
@@ -135,7 +211,9 @@ node tools/ui-smoke.mjs 9333
 球员头照：tools/fetch-player-faces.mjs（alexnoob 2025-26 rosters 的 imgURL 取 playerId → cdn.nba.com 260x190）
           + tools/fetch-player-faces-extra.mjs（2kratings 1280x720 大图补齐）→ src/assets/players/（572 张）
 球队队徽：NBA 官方 CDN → src/assets/teams/*.svg（30 队；**SAS 的正确 teamID = 1610612759**）
-主菜单背景：tools/fetch-backdrops.mjs（Pexels 免费商用）→ src/assets/backdrops/*.jpg（10 张，20s 轮播）
+主菜单背景：tools/fetch-nba-photos.ps1（**NBA 官网 cdn.nba.com 官方比赛照片**，抓取后统一压缩）
+          → src/assets/backdrops/nba-*.jpg（**50 张 1920×1080，1s 轮播**，共约 13.7 MB）
+          （v2.7.0 之前是 tools/fetch-backdrops.mjs 抓的 10 张 Pexels 图，已弃用/删除）
 ```
 
 **年龄推导（2K 数据无年龄字段）**：`ratingHistory.length = len` → `draftYear = 2027 - len`（len=0 → 2026 届新秀），`age = 2026 - draftYear + 18 + hash%4`。
@@ -180,8 +258,11 @@ v2.5.0 常规赛/季后赛统计分离：simulateGame(away, home, rng, accumulat
                 posW = {PG .95, SG .9, SF 1.0, PF 1.0, C .98}（位置差异收窄，内线核心不再被压制）
                 ability = clamp(1 + (ovr-75)*0.022, 0.60, 1.75)
                 usage 自定义 → ×(0.35 + usage*0.13)；PlayCall 发起位 ×2.6，其余无自定义 ×0.85
-出手者：35% 持球人自投；否则 tend[pos] × (0.8 + three/180) × ability^1.4 × coreBoost
+                ⚠️ v2.6.4 修复：该系数**必须同时作用于下面"出手者"一段**（`uw(p)`），
+                   否则"拉满球权"只改变谁带球、不改变谁出手（用户实测中锋出手 7.6 → 14.4 才正常）
+出手者：35% 持球人自投；否则 tend[pos] × (0.8 + three/180) × ability^1.4 × coreBoost × uw(p)
         tend = {PG .7, SG .9, SF 1.0, PF 1.0, C 1.0}
+        uw(p) = p.usage != null ? 0.35 + p.usage*0.13 : 1（v2.6.4；留空 = 1，不影响默认与基线）
         coreBoost（v2.3.1 队内战术地位）：队内 OVR 最高 ×1.5、第二 ×1.2、其余 ×1
           （缓存 roleCache：key = 队内人数 + 最高 OVR，交易/成长后自动失效）
 投篮构成（v2.3.1 改为能力驱动）：pull = clamp((three-45)/32, 0, 1)
@@ -302,6 +383,27 @@ v2.5.0 UI 位置筛选：`.fa-filter`（全部 + PG/SG/SF/PF/C，带人数统计
 
 ### 5.7 交易（`league.ts`）
 ```
+【前二当家溢价 v2.6.2（用户指定）】TOP2_PREMIUM = 1.5，`top2Ids(t)` = 按 OVR 降序的前 2 人。
+  evaluateTrade 里 AI 送出的当家球员按 `wPlayer(p) × 1.5` 计入 aiGiveVal（即要价），
+  拒绝理由带"（XX 是队内前二当家：要价按 1.5 倍计）"；反向搜索的 wantVal 同样 ×1.5。
+  与核心门槛互补：核心门槛管"能不能换"，本溢价管"要多少才换"。
+  实测：塔图姆(93·5.22) 单换伦纳德(93·要价 6.11) → 拒绝；塔图姆+怀特(6.96 ≥ 6.11) → 成交。
+【位置无关估值口径 v2.6.2（用户指定）】`gen.valueOvr(p)` = `baseOvr + (calcOvr(skills) − calcOvr(baseSkills))`
+  （与 offseason.recalcOvr 同式）。tradeEff/tradeValue/phaseValue、档位系数 ovrValueWeight、
+  核心判定、队内前二、球队阶段全部按它算 → 在阵容页换位（能力仍按新位置适配）**不会**改变
+  球员的交易身价，也不能靠换位规避"85+ 核心"或"前二当家"规则。未换位时 ≡ p.ovr（基线不变）。
+【核心门槛 v2.6.1（用户指定）】CORE_OVR = 85 = 各队"中流砥柱"。
+  `coreBlockReason(ai, want, give)` 在 evaluateTrade 里**先于估值判定**执行（位置：签冻结检查之后、
+  明星拒绝之前），因此所有交易入口自动生效（正向/反向搜索、AI 主动报价、AI 间交易）。三条判定：
+    ① 数量：对方送出 N 名 OVR ≥ 85，你必须送出 ≥ N 名 OVR ≥ 85（选秀权/低能力添头不能替代）；
+    ② 不许降级：按 ovr 降序一一配对，你给出核心的 ovr 不得低于对方核心（85 换不走 87）；
+    ③ 同档不许拿老换少：ovr 相同时，你给出核心的 age 不得大于对方核心。
+  拒因文案统一含"中流砥柱"三个字（selfTest 据此断言）。
+【能力档位系数 v2.6.1（用户指定）】`ovrValueWeight(ovr)` 同时乘在 tradeValue（市场价）与
+  phaseValue（决策价）上，保证"展示口径 = 判定口径"：
+    OVR < 75 → ×0.5 · 75-79 → ×0.8 · 80-84 → ×1.0 · 85-89 → ×1.2 · ≥90 → ×1.4
+  （分段不连续是用户指定的口径，**勿擅自改成平滑插值**）。选秀权 pickValue 不受影响。
+  实测（真实名单，salary=0/age=27）：75→0.8 · 80→1.41 · 85→2.4 · 90→4.24 · 95→6.01。
 【交易搜索器 v2.3.0】searchTrades(l, givePids, givePickIdx, maxPerTeam=3) → TradeSuggestion[]
   入参 = 玩家勾选的自有筹码（1-N 名球员 / 选秀权）；遍历 29 队，四类搜索：
     ① 单换单 ② 对方「球员 + 选秀权」 ③ 对方打包两人 ④ 追加我方筹码
@@ -423,8 +525,11 @@ faDay/faOffers/poffExitShown/pendingEvents/draft → **v2.5.0：`poGp/poStats` �
 
 - **App.tsx**：顶栏（版本号 ×2 处）、5+1 个 tab（🏀赛程 / 🧩阵容 / 🤝交易 / 💼自由市场 / 📊联盟 / 🎓新秀）、
   `l.offseason` 为真时整页切 `OffseasonView`、赛季结束横幅、`ChangelogModal`（每次启动强制显示）。
-- **TitleScreen.tsx**：菜单 → 选队（30 队卡片）→ **球队风格二选一**（居中）→ **执教风格三选一** → 开局；
-  背景 10 张图 20s 轮播（`.title-bg` 需 `:not()` 选择器避免被 `>*` 覆盖）。
+- **TitleScreen.tsx**：菜单 → **「我是新手 / 我玩过」分流页（v2.7.0）** → 选队（30 队卡片）→
+  **球队风格二选一**（居中）→ **执教风格三选一** → 开局；
+  v2.7.0：背景 **50 张真实 NBA 官方照片、1 秒轮换**（双层 `.title-bg` / `.title-bg-alt` 交叉淡入 + 预加载）；
+  新手路径进入 `.rules-card` 规则总览（7 个板块，规则文字全部集中在此），老手直接进选队；
+  **已移除导入存档按钮**（存档导入导出功能整体删除，连同 `useGame` 与 Electron IPC）。
 - **DraftView.tsx**（v2.3.0 新页面）：下一届新秀榜（`l.nextDraftClass` 80 人），表格列 = 预测顺位/
   头像/姓名/位置/年龄/身高/体重/臂展/OVR/潜力星/国籍，支持按实力·年龄·身高排序，点行开 `PlayerModal`；
   顶部显示我的签与选秀时间。`.draft-board`/`.db-*`。
@@ -457,7 +562,9 @@ faDay/faOffers/poffExitShown/pendingEvents/draft → **v2.5.0：`poGp/poStats` �
   **v2.5.0 位置筛选条 `.fa-filter`**（全部/控卫/分卫/小前/大前/中锋，带人数，含副位置可打者）。
 - **LeagueView.tsx**：排名（行可点进 `TeamDetail`：队徽/战绩/排名/工资单/战力/风格 + 15 人列表）/
   数据榜（无「效率」；**v2.5.0 顶部「常规赛数据 / 季后赛数据」双 tab**，季后赛表用 `poGp/poStats`，
-  表头列名变「季后赛出场」）/ 荣誉殿堂（`AwardsPanel` + 历届冠军 MVP FMVP）。
+  表头列名变「季后赛出场」；**v2.6.3 起显示全部上榜球员**——`leaders()` 不再 `slice(0,20)`，
+  顶部 `.leaders-count` 标出总人数，`.leaders-scroll`（max-height 74vh）滚动 + 表头吸顶）/
+  荣誉殿堂（`AwardsPanel` + 历届冠军 MVP FMVP）。
 - **AwardsPanel.tsx**：`AwardCard`（大奖卡，冠军界复用 FMVP）、`AwardsPanel`（4 大奖卡 + All-NBA 3 阵 +
   防守 2 阵 + 新秀 2 阵，均带场均数据与队徽）、`AwardsModal`（`big` 模式 + 可滚动）。
 - **PlayerModal.tsx**：头像/基准信息（cm 身高、潜力星、双位置、国籍仅非美国显示、生涯数据）+ 7 维属性 +
@@ -494,8 +601,13 @@ faDay/faOffers/poffExitShown/pendingEvents/draft → **v2.5.0：`poGp/poStats` �
 
 ## 10. 环境与运维经验（踩过的坑）
 
-1. **沙箱**：文件策略 `danger-full-access`；命令可直接执行，**不要**传 `sandbox_permissions`（审批已关闭）。
-   workspace-write 下 spawn 命名管道受限 → esbuild/vite/electron-builder/Electron 会 EPERM。
+1. **沙箱（2026-09-19 接管会话实测修订）**：当前会话为 `workspace-write` + 审批 `ask`。
+   在该模式下 `tsc` / `esbuild` 打包 / `node tools/.selfTest.cjs` **实测全部正常，无 EPERM、未申请提权**。
+   仍未实测的：`vite build` / `electron-builder` / `Electron + CDP ui-smoke`（历史记录称这些会因
+   spawn 命名管道受限而 EPERM）。因此：
+   - 不要再默认"必须 `danger-full-access`"——先按现状直接跑；
+   - 若发版时真的遇到 EPERM，**按当前审批策略（`ask`）对同一条命令提权重试一次**
+     （与旧记录"审批已关闭、不要传 `sandbox_permissions`"相反，旧说法已作废）。
 2. **工具路径**：`cmd /c node_modules\.bin\<tool>.cmd`（`.ps1` 被执行策略禁）；`npm` 用 `npm.cmd`；
    tsc 必须在项目目录（否则 `Cannot find module`）。
 3. **PowerShell**：读 UTF-8 文件用 `[System.IO.File]::ReadAllText`（PS 5.1 默认 GBK 会 mojibake）；
@@ -528,6 +640,12 @@ faDay/faOffers/poffExitShown/pendingEvents/draft → **v2.5.0：`poGp/poStats` �
    （`coreBoost`）②三分倾向改能力驱动 ③位置口径修正 ④手动轮换改「每分钟排班表」。**均为有意为之的方向性调整**。
    **v2.5.0 记录**：真实名单 **206.0 分/队**（FG 47.9%，3P 37.0%，FT 77.8%，篮板 94.7，失误 31.6，
    得分王塔图姆 28.8 / 篮板王 14.0）——引擎数值未动，仅统计口径与休赛期账面处理变化，基线稳。
+   **v2.6.1 记录**：真实名单 **206.1 分/队**（FG 47.9%，3P 36.8%，FT 77.9%，得分王塔图姆 29.7）；
+   虚构 **203.6 分/队**。本次只改交易估值与选秀生成、未动模拟参数 → 基线维持在 206 附近（±0.1，
+   属 AI 交易笔数变化带来的阵容微扰，非引擎参数漂移）。
+   **v2.6.2 记录**：真实名单 **206.1 分/队**（FG 47.9%，3P 36.8%，FT 77.9%，得分王塔图姆 29.7）、
+   虚构 **203.6 分/队** —— 与 v2.6.1 **逐位相同**。原因：未换位时 `valueOvr(p) ≡ p.ovr`，
+   位置无关口径在默认阵容下等价于旧算法；前二溢价只影响交易成交与否，不进入比赛模拟。
 10. **位置口径的历史（已按用户最终决定收敛）**：
     - v2.3.0 曾用「身高 + 技能评分」推断位置（修好卡鲁索/杰伦·威廉姆斯，但把格林判成分卫）；
     - **v2.4.0 起按用户要求严格照搬 2K `positions` 数组**，推断/均衡代码全部删除；
@@ -576,6 +694,54 @@ faDay/faOffers/poffExitShown/pendingEvents/draft → **v2.5.0：`poGp/poStats` �
 20. **估值口径必须和决策口径一致（v2.5.1）**：搜索器原先用市场价算"你赚/你亏"，
     但成交判定用折算价 → 会出现"显示你亏 1.3，却提示可以成交"。现在两侧都用同一套
     `phaseValue`（搜索器用**我方**阶段、判定用**对方**阶段），并在理由里同时给出两种数值。
+21. **硬门槛与估值系数互补，不能只上一种（v2.6.1 实测）**：用户要求"85 以上是中流砥柱"，
+    最初只靠"添头折价"（下半价）实现——实测真实名单 **27 组「85 核心 + 2 添头 换 87+ 核心」仍有
+    11 笔成交**，其中就包括用户截图里的骑士莫布利（萨博尼斯 2.0 + 0.54 + 0.38 = 2.92 ≈
+    莫布利争冠折算 2.9，差 0.0 → 落在容忍区间内成交）。加上"核心只能用同等/更强的核心换"后归零。
+    **通用教训：估值类调整只能改变"划不划算"，改变不了"该不该"。凡是规则性的市场行为
+    （非卖品、锁定、名单/薪资限制），必须用独立于估值的硬门槛表达，二者叠加才稳。**
+22. **低能力"折价"与高能力"溢价"要成对设计（v2.6.1）**：只压低下限（<75 半价）会让高能力球员
+    相对变便宜——同一笔"1 核心 + 添头"反而更容易凑够。必须同时抬高上限（85-89 ×1.2 / ≥90 ×1.4）
+    才能把核心与添头真正拉开。另外档位系数是**分段**的，边界会跳档（74→75、79→80 之间），
+    这是用户明确指定的口径，不要"顺手"改成平滑插值。
+23. **"改 ovr 造 mock"的测试遇到"基准制"口径会集体失真（v2.6.2 实测）**：交易估值改用
+    `valueOvr = baseOvr + (calcOvr(skills) − calcOvr(baseSkills))` 后，selfTest 里 8 条档位断言
+    全部报同一个数（4.24）——因为 `mk(ovr) = {...me.players[0], ovr}` 只是浅拷贝，带着**原球员的
+    baseOvr 与 baseSkills**，`valueOvr` 自然无视被改写的 ovr。修法：mock 必须同时写
+    `baseOvr: <目标值>` **且** `baseSkills: {...skills}`（清零继承来的技能增量）。
+    同一轮还暴露另一半：`valueOvr` 直接读 `p.skills`，而部分 mock 只有 ovr/salary →
+    抛 `Cannot read properties of undefined (reading 'layup')`，所以它对缺 skills 的对象必须回退 `p.ovr`。
+    **教训：新口径只要引入新的字段依赖，就要同时检查"部分构造对象"与"mock 伪造字段"两条路径。**
+24. **"与位置无关"要用生成期的不变量，而不是事后逆运算（v2.6.2）**：用户要求交易身价与阵容摆位
+    脱钩。现成可用的锚点是 `baseOvr/baseSkills`（生成期写入、换位不碰），于是 `valueOvr` 天然恒定；
+    若改用"换位后用 baseAttrs 反算回基准位置"，会因换位时 ovr 已按 baseOvr 缩放而**丢掉成长增量**，
+    越算越偏。**优先找生命周期里的不变量，而不是事后做逆运算。**
+25. **自定义参数的"生效面"要覆盖整条决策链（v2.6.4 用户实测）**：轮换页的"球权权重（0-10）"
+    在实现里只乘在**持球人**选择上，而每回合 65% 的出手来自"接球出手"竞争那一段——那段没读
+    `usage`。用户按 UI 语义操作（"拉满中锋球权、压低其他位置"），得到的却是"只换了带球人、
+    出手数几乎不变"。**教训：玩家可调的参数，必须在它语义覆盖的每一段决策里都出现**；
+    只改一段，在玩家眼里就等于"这个功能没生效"。另外注意叠加效应：中锋还有两处天然劣势
+    （持球权重 `pow(pas/70,2)`、出手权重 `(0.8+three/180)`），所以参数修好后要跑一次
+    "拉满 / 归零"的对照实验确认效果量级（本次 7.6 → 14.4 → 3.3 次出手/场）。
+26. **规则说明集中到一处，界面只留功能标签（v2.7.0 用户要求）**：用户要求"去除所有界面带有说明性的
+    文字"，规则统一收进主菜单新增的规则页。清理时用的判断标准：**段落式叙述、操作指引、规则解释**
+    一律删（如"勾选自己队里 1 名或多名球员…""点击球员即实时预检"）；**数据标签（"工资单""要价"
+    "场次"）、状态警报（"名单已满""超税线"）、按钮文字与 `title` 悬停提示**保留——否则界面失去可用性。
+    这类改动会跨多个 UI 文件，改完**必须跑 ui-smoke**（它在多处点按钮、读文本、依赖选择器：
+    本次把自由市场筛选从 `.fa-filter` 改成 `.head-tools`，冒烟脚本要同步改）。
+27. **"铺底背景"要两层元素分工（v2.7.1）**：用户要求游戏内也能看见照片。背景层直接写 `opacity`
+    会和交叉淡入抢同一个属性——内联 `opacity`（淡入用）会覆盖 CSS 里的透明度设置。正确做法：
+    **外层 wrap 控整体透明度**（`.game-bg-wrap { opacity:.2 }`），**内层两层控交叉淡入**
+    （各自 `opacity` 0/1 + transition）。另外固定背景层要 `z-index:0` 并把 `.topbar`/`.main`/
+    `.season-banner` 提到 `z-index:1`——否则要么被内容盖住、要么反过来压住点击。
+    另有可读性经验：卡片本身是**不透明**的（`var(--panel)`），所以背景只从页面底色透出来，
+    透明度 0.2 已足够"看得见照片"且不干扰读数据。
+    ⚠️ **轮播 state 绝不能放在 `App` 层（v2.7.1 实测踩坑）**：第一版把 `useBackdropRotation()`
+    写在 `App` 里，每 5 秒一次 `setState` 会让**整页重渲染**——数据榜此时有 450 行表格，
+    结果 ui-smoke 里"系列比分 / 冠军界面 / 选秀面板 / 进入自由市场"**连续四步超时**
+    （页面没崩、也没报错，就是被重渲染拖慢）。把轮播 state 收进 `<GameBackdrop />` 子组件后
+    全部恢复。**通用规则：高频定时器 state 必须放在最小的叶子组件里**；看到"多步操作集体超时
+    但无 console 错误"，先怀疑有没有全局级的高频重渲染源。
 
 ---
 

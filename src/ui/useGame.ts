@@ -15,8 +15,6 @@ export interface GameApi {
   startNew: (l: LeagueState) => void;
   continueGame: () => Promise<boolean>;
   saveNow: () => Promise<boolean>;
-  exportSave: () => Promise<void>;
-  importSave: () => Promise<boolean>;
   resetToTitle: () => void;
   dirty: boolean;
 }
@@ -115,34 +113,6 @@ export function useGame(): GameApi {
     return ok;
   }, [persist]);
 
-  const exportSave = useCallback(async () => {
-    if (!leagueRef.current || !window.gm) return;
-    await window.gm.exportFile(
-      `NBA经理-${leagueRef.current.year}赛季-${new Date().toISOString().slice(0, 10)}`,
-      pack(leagueRef.current)
-    );
-  }, []);
-
-  const importSave = useCallback(async (): Promise<boolean> => {
-    if (!window.gm) {
-      // 浏览器模式不支持文件对话框
-      return false;
-    }
-    const r = await window.gm.importFile();
-    if (r.ok && r.data) {
-      const data = r.data as SaveFile;
-      if (data.league) {
-        migrateSave(data.league); // 导入老档同样迁移
-        leagueRef.current = data.league;
-        setLeague(data.league);
-        setSaveTime(Date.now());
-        setHasSave(true);
-        return true;
-      }
-    }
-    return false;
-  }, []);
-
   const resetToTitle = useCallback(() => {
     leagueRef.current = null;
     setLeague(null);
@@ -169,6 +139,6 @@ export function useGame(): GameApi {
   }, []);
 
   return {
-    league, hasSave, saveTime, tick, startNew, continueGame, saveNow, exportSave, importSave, resetToTitle, dirty,
+    league, hasSave, saveTime, tick, startNew, continueGame, saveNow, resetToTitle, dirty,
   };
 }

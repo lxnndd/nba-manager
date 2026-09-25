@@ -22,8 +22,24 @@
    报告结果（tsc 错误数、selfTest 失败数与真实名单场均/得分王等基线数字）；
 3. 告诉我你建议的下一步（可选：档案 §11 遗留项）。
 
-**注意**：本机沙箱是 danger-full-access（不要传 sandbox_permissions）；命令用 `cmd /c node_modules\.bin\<tool>.cmd`；
-改完代码要跑完整验证链（档案 §9）并打包 `release\NBA-Manager-<version>.exe`。
+**注意（2026-09-20 修订）**：命令一律用 `cmd /c node_modules\.bin\<tool>.cmd`；
+本机当前文件策略为 **danger-full-access、审批 never** → 所有命令（含 `vite build` / `electron-builder` /
+CDP 冒烟）**直接跑即可，不要传 `sandbox_permissions`**（会被自动拒绝）。
+仅当某次会话回到受限沙箱、且报 `spawn EPERM`（esbuild / electron-builder 需经命名管道 spawn 子进程）时，
+才按当时的审批策略对同一条命令提权重试一次。
+改完代码跑验证链（档案 §9；**v2.6.0 起"只测试改的功能"，全量 selfTest/ui-smoke 仅在发版前或改动涉及全局数值时跑**），
+发版打包 `release\NBA-Manager-<version>.exe`。
+
+**发版与清理约定（v2.6.4 起）**：
+- **所有产物只留在项目自己的文件夹内，不要超出**：打包产物 =
+  `C:\Users\10709\Desktop\AI\nba-manager\release\NBA-Manager-<version>.exe`，使用说明就是项目里的
+  `使用说明.txt`；**绝不往上级目录（AI 根目录 / 桌面）复制或另存任何文件**——用户 2026-09-20 明确要求，
+  之前加的"自动同步一份到桌面"（`tools/sync-desktop.mjs` / `npm run sync`）已因违反这条被删除，
+  不要重新引入；
+- `npm run dist` = `vite build` → `electron-builder` → `prune-old-releases.mjs`
+  （**release 只留最新 1 个** exe），旧版本不再堆叠；
+- **项目本体（源码 / 资源 / 配置 / 底层设定）一律不动**；AI 文件夹里其他项目的文件
+  （声学论文 / 劫火八荒 / 洛克王国 / 海洋调查等）也一律不要碰。
 
 我接下来会给你新的需求，请按档案里的工作方式推进（实现 → 全量验证 → 打包 → 更新 Changelog/使用说明 → 交付产物路径）。
 

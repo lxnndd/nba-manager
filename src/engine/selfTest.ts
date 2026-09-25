@@ -571,8 +571,11 @@ function run(): void {
   l.userTeamId = 0;
   const me = l.teams[0];
   // 估值自洽：22 岁潜力小将 ≈ 32 岁老将（确定性构造，避免随机抽样波动）
-  const young = { ...me.players[0], ovr: 72, potential: 10, age: 22, salary: 480, contractYears: 3 } as unknown as Player;
-  const old = { ...me.players[0], ovr: 85, potential: 5, age: 32, salary: 2100, contractYears: 2 } as unknown as Player;
+  // v2.6.2：交易估值改用 valueOvr（= baseOvr + calcOvr(skills) − calcOvr(baseSkills)）→
+  //   mock 必须同时改写 baseOvr **并把 baseSkills 对齐 skills**（消除继承来的技能增量），
+  //   否则"只改 ovr"的伪造球员在估值里仍是原球员的能力。
+  const young = { ...me.players[0], ovr: 72, baseOvr: 72, baseSkills: { ...me.players[0].skills }, potential: 10, age: 22, salary: 480, contractYears: 3 } as unknown as Player;
+  const old = { ...me.players[0], ovr: 85, baseOvr: 85, baseSkills: { ...me.players[0].skills }, potential: 5, age: 32, salary: 2100, contractYears: 2 } as unknown as Player;
   if (young && old) {
     console.log(`  young ${young.name} o${young.ovr} p${young.potential}星 a${young.age} → 估值对比老将 ${old.ovr} a${old.age}`);
     ok(young.age <= 25 && young.potential >= 8, '潜力小将特征');
@@ -580,17 +583,30 @@ function run(): void {
     console.log(`    young 估值 ${yv} vs 老将估值 ${ov}`);
     // 指数语义：老将（即战力）与潜力小将价值应同量级（0.2-5 倍误差内），体现"价值对等"
     ok(yv / ov > 0.2 && yv / ov < 5, `潜力与即战力价值对等（young/old=${(yv / ov).toFixed(2)}）`);
-    // 指数基准：75 能力=1.0、每 +10 翻倍 → 直接用 tradeValue 换算回等效能力检查单调性
-    const basePlayer = { ...young, ovr: 75, potential: 5, age: 27, salary: 0, contractYears: 0 } as unknown as Player;
+    // 指数基准：75 能力=1.0、每 +10 翻倍 —— v2.6.1 起 75 落在"添头折价"档（×0.8）
+    const basePlayer = { ...young, ovr: 75, baseOvr: 75, potential: 5, age: 27, salary: 0, contractYears: 0 } as unknown as Player;
     const base = tradeValue(basePlayer as Player);
-    ok(Math.abs(base - 1) < 0.01, `75 能力基线估值≈1（实际 ${base}）`);
+    ok(Math.abs(base - 0.8) < 0.01, `75 能力估值 = 指数 1.0 × 添头折价 0.8（实际 ${base}）`);
   }
   // 指数单调性：高 OVR 同条件估值必须严格更高（75→85→95 约 1→2→4）
   {
-    const mk = (ovr: number) => ({ ...me.players[0], ovr, potential: 5, age: 28, salary: 0, contractYears: 0 }) as unknown as Player;
+    const mk = (ovr: number) => ({ ...me.players[0], ovr, baseOvr: ovr, baseSkills: { ...me.players[0].skills }, potential: 5, age: 28, salary: 0, contractYears: 0 }) as unknown as Player;
     const v75 = tradeValue(mk(75) as Player), v85 = tradeValue(mk(85) as Player), v95 = tradeValue(mk(95) as Player);
     console.log(`  指数单调: 75→${v75} / 85→${v85} / 95→${v95}`);
     ok(v85 > v75 * 1.7 && v95 > v85 * 1.7, '每 +10 能力估值大致翻倍');
+    // v2.6.1 添头折价分段（用户口径：OVR<75 对半砍、75-79 降 20%、≥80 不折价）
+    const raw = (ovr: number) => Math.pow(2, (ovr - 75) / 10);
+    const near = (a: number, b: number) => Math.abs(a - b) < 0.02;
+    ok(near(tradeValue(mk(74)), raw(74) * 0.5), `74 能力半价（${tradeValue(mk(74))}）`);
+    ok(near(tradeValue(mk(75)), raw(75) * 0.8), `75 能力八折（${tradeValue(mk(75))}）`);
+    ok(near(tradeValue(mk(79)), raw(79) * 0.8), `79 能力八折（${tradeValue(mk(79))}）`);
+    ok(near(tradeValue(mk(80)), raw(80)), `80 能力不折价（${tradeValue(mk(80))}）`);
+    // v2.6.1 核心溢价（用户口径：85-89 涨 20%、≥90 涨 40%；≥90 另含"球星稀缺" +1 等效能力）
+    const lvl = (ovr: number) => ovr + (ovr >= 90 ? 1 : 0);
+    const epx = (ovr: number, w: number) => raw(lvl(ovr)) * w;
+    ok(near(tradeValue(mk(85)), epx(85, 1.2)), `85 能力涨 20%（${tradeValue(mk(85))}）`);
+    ok(near(tradeValue(mk(89)), epx(89, 1.2)), `89 能力涨 20%（${tradeValue(mk(89))}）`);
+    ok(near(tradeValue(mk(90)), epx(90, 1.4)), `90 能力涨 40%（${tradeValue(mk(90))}）`);
   }
   const v = evaluateTrade(l, me.id, 1, [], [], [], []);
   console.log('  空筹码评估:', JSON.stringify(v));
@@ -854,10 +870,23 @@ function run(): void {
     const up = [...res, ...res2, ...res3].filter((s) => s.needsMore);
     console.log(`  "需追加筹码"方案 ${up.length} 条${up.length ? `（样例：送你 ${up[0].givePids.length} 人 + ${up[0].givePickIdx.length} 签 → 得 ${up[0].wantPids.length} 人）` : ''}`);
     if (up.length) {
-      const s = up[0];
-      const base = [res, res2, res3].find((arr) => arr.some((x) => x.teamId === s.teamId)) ?? [];
-      const sameTeam = base.find((x) => x.teamId === s.teamId);
-      ok(!sameTeam || s.givePids.length >= sameTeam.givePids.length, '"需追加"方案确实比基础方案多要了你的筹码');
+      // v2.6.1：原断言拿"同队的任意基础方案"作比较，但那个基础方案可能对应完全不同的目标组合
+      //   （换的目标不同、筹码自然不同），估值口径一变就会误报。改为直接验证 needsMore 的语义：
+      //   方案筹码必须包含该次搜索的原始入参，并且确实在原始筹码之外多要了东西。
+      const inputs = [
+        { arr: res, pids: [byOvr[0].id] as number[], picks: [] as number[] },
+        { arr: res2, pids: multi, picks: [] as number[] },
+        { arr: res3, pids: [] as number[], picks: [firstPick] },
+      ];
+      const bad = up.filter((s) => {
+        const src = inputs.find((x) => x.arr.includes(s));
+        if (!src) return false;
+        const hasBase = src.pids.every((id) => s.givePids.includes(id))
+          && src.picks.every((i) => s.givePickIdx.includes(i));
+        const more = s.givePids.length + s.givePickIdx.length > src.pids.length + src.picks.length;
+        return !hasBase || !more;
+      });
+      ok(bad.length === 0, `"需追加"方案确实在原始筹码之外多要了筹码（异常 ${bad.length} 条）`);
     }
     ok(searchTrades(tl, [], [], 3).length === 0, '未勾选筹码时不返回任何建议');
     // 成交后筹码确实转移
@@ -870,8 +899,10 @@ function run(): void {
 
     // ---------- v2.6.0 反向报价搜索器（我想要谁 → 算我要付什么）----------
     console.log('== v2.6.0 反向报价搜索器（选定对方球员 → 生成我方报价）==');
+    // v2.6.1：目标改用"非核心"（OVR 80-84）—— 85+ 是各队中流砥柱、玩家没有同档核心时
+    //   反向搜索必然给不出方案（核心门槛），那是新规则的正确行为（见下面的专门断言）。
     const rival = tl.teams.slice(1).flatMap((t) => t.players.map((p) => ({ p, t })))
-      .filter((x) => x.p.ovr >= 84 && x.p.age <= 30)
+      .filter((x) => x.p.ovr >= 80 && x.p.ovr <= 84 && x.p.age <= 30)
       .sort((a, b) => b.p.ovr - a.p.ovr)[0];
     const t1 = Date.now();
     const tres = searchTradeTargets(tl, [rival.p.id], [], 3);
@@ -897,6 +928,27 @@ function run(): void {
       }
     }
     ok(searchTradeTargets(tl, [], [], 3).length === 0, '未选目标时不返回报价');
+
+    // ---------- v2.6.1 核心门槛（用户指定：OVR ≥ 85 都是各队中流砥柱，核心只能用同等/更强的核心换）----------
+    {
+      const core = tl.teams.slice(1).flatMap((t) => t.players.map((p) => ({ p, t })))
+        .filter((x) => x.p.ovr >= 87)
+        .sort((a, b) => b.p.ovr - a.p.ovr)[0];
+      const myBest = [...tl.teams[0].players].sort((a, b) => b.ovr - a.ovr)[0];
+      if (core && myBest && myBest.ovr < core.p.ovr) {
+        const fillers = [...tl.teams[0].players].filter((p) => p.ovr < 75).slice(0, 3).map((p) => p.id);
+        if (fillers.length >= 2) {
+          const vFill = evaluateTrade(tl, 0, core.t.id, fillers, [core.p.id]);
+          console.log(`  核心门槛：${fillers.length} 名 OVR<75 添头 换 ${core.p.name}(O${core.p.ovr}) → ${vFill.accept ? '成交（异常）' : '拒绝'}`);
+          ok(!vFill.accept && vFill.reason.includes('中流砥柱'), '纯添头凑价值换核心被拒');
+        }
+        const vLower = evaluateTrade(tl, 0, core.t.id, [myBest.id], [core.p.id]);
+        console.log(`  核心门槛：${myBest.name}(O${myBest.ovr}) 换 ${core.p.name}(O${core.p.ovr}) → ${vLower.accept ? '成交（异常）' : '拒绝'}`);
+        ok(!vLower.accept && vLower.reason.includes('中流砥柱'), `更低档次的核心换不走对方核心（${myBest.ovr} < ${core.p.ovr}）`);
+        const vRev = searchTradeTargets(tl, [core.p.id], [], 3);
+        ok(vRev.length === 0, `无同档核心时反向搜索不给方案（${vRev.length} 条）`);
+      }
+    }
   }
 
   // ---------- v2.3.0 年龄口径 / 自由市场数组不可变 ----------

@@ -19,22 +19,51 @@ export function RosterView({ api }: { api: GameApi }) {
   const [dragPid, setDragPid] = useState<number | null>(null);
   const [dropPos, setDropPos] = useState<Pos | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // v2.7.1：点开"风格 / 执教 / 羁绊"查看详情
+  const [info, setInfo] = useState<{ kind: 'team' | 'coach' | 'bond'; id?: string } | null>(null);
   // v2.5.0：常规赛结束后（季后赛进行中/已结束）阵容页切换显示季后赛数据
   const poMode = l.playoffRounds.length > 0;
+  // v2.7.1：羁绊统计提到组件层（气质面板与详情弹窗共用）
+  const bonds: [string, number][] = (() => {
+    const cnt: Record<string, number> = {};
+    for (const p of me.players) for (const t of p.tags ?? []) cnt[t] = (cnt[t] ?? 0) + 1;
+    return Object.entries(cnt).filter(([, n]) => n >= 2);
+  })();
 
-  const move = (pos: Pos, idx: number, dir: -1 | 1) => {
-    const same = me.players.filter((p) => p.pos === pos);
-    const target = idx + dir;
-    if (target < 0 || target >= same.length) return;
-    // 在完整数组里交换两个同位置球员的位置
-    const a = same[idx];
-    const b = same[target];
-    const ia = me.players.indexOf(a);
-    const ib = me.players.indexOf(b);
-    const tmp = me.players[ia];
-    me.players[ia] = me.players[ib];
-    me.players[ib] = tmp;
-    api.tick();
+  // v2.7.2：去掉卡片上的 ↑↓ 按钮，改为**拖动**排序（同列拖动=调整轮换顺序；拖到另一列=主副互换）
+  const [overCard, setOverCard] = useState<{ pos: Pos; idx: number } | null>(null);
+  const autoMinOf = (p: Player) => {
+    const same = me.players.filter((q) => q.pos === p.pos);
+    const idx = same.indexOf(p);
+    return AUTO_MINUTES[Math.min(Math.max(idx, 0), AUTO_MINUTES.length - 1)];
+  };
+  const dropOnCard = (e: React.DragEvent, pos: Pos, idx: number) => {
+    e.preventDefault();
+    e.stopPropagation(); // 别冒泡到 .pos-col（那是"拖到列上"的主副互换）
+    const pid = Number(e.dataTransfer.getData('text/plain')) || dragPid;
+    setDragPid(null);
+    setDropPos(null);
+    setOverCard(null);
+    if (!pid) return;
+    const dragged = me.players.find((p) => p.id === pid);
+    if (!dragged) return;
+    if (dragged.pos === pos) {
+      // 同一位置内：拖到第 idx 张卡片处（重新排序）
+      const same = me.players.filter((p) => p.pos === pos);
+      const from = same.findIndex((p) => p.id === pid);
+      if (from === -1 || from === idx) return;
+      const arr = [...same];
+      const [moved] = arr.splice(from, 1);
+      arr.splice(idx, 0, moved);
+      const slots = me.players.map((p, i) => (p.pos === pos ? i : -1)).filter((i) => i >= 0);
+      slots.forEach((gi, k) => { me.players[gi] = arr[k]; });
+      api.tick();
+    } else if (dragged.secPos === pos) {
+      // 拖到自己能打的另一个位置 → 主副互换
+      const res = repositionPlayer(me, pid, pos);
+      api.tick();
+      setNotice(`🏀 ${res.moved.name} 改打 ${POS_CN[pos]}（${POS_CN[res.moved.secPos]} ↔ ${POS_CN[pos]} 主副互换），能力值已按新位置适配`);
+    }
   };
 
   const setMin = (p: Player, v: number) => {
@@ -135,20 +164,23 @@ export function RosterView({ api }: { api: GameApi }) {
         {(() => {
           const style = TEAM_STYLES.find((s) => s.id === me.style);
           const coach = COACH_STYLES.find((s) => s.id === me.coachStyle);
-          const bonds: [string, number][] = (() => {
-            const cnt: Record<string, number> = {};
-            for (const p of me.players) for (const t of p.tags ?? []) cnt[t] = (cnt[t] ?? 0) + 1;
-            return Object.entries(cnt).filter(([, n]) => n >= 2);
-          })();
           if (!style && !coach && bonds.length === 0) return null;
           return (
             <div className="team-meta-extra">
-              {style && <span className="meta-chip">{style.icon} 风格：{style.name}</span>}
-              {coach && <span className="meta-chip">{coach.icon} 执教：{coach.name}</span>}
+              {style && (
+                <button className="meta-chip clickable" onClick={() => setInfo({ kind: 'team', id: style.id as string })}>
+                  {style.icon} 风格：{style.name}<span className="chip-more">详情 ›</span>
+                </button>
+              )}
+              {coach && (
+                <button className="meta-chip clickable" onClick={() => setInfo({ kind: 'coach', id: coach.id as string })}>
+                  {coach.icon} 执教：{coach.name}<span className="chip-more">详情 ›</span>
+                </button>
+              )}
               {bonds.length > 0 && (
-                <span className="meta-chip bonds" title="同队同标签 ≥2 人组成羁绊：每多 1 名队友 +0.12pp 进攻（比赛内生效）">
-                  🤝 羁绊：{bonds.map(([t, n]) => `${t}×${n}`).join(' · ')}
-                </span>
+                <button className="meta-chip bonds clickable" onClick={() => setInfo({ kind: 'bond' })}>
+                  🤝 羁绊：{bonds.map(([t, n]) => `${t}×${n}`).join(' · ')}<span className="chip-more">详情 ›</span>
+                </button>
               )}
             </div>
           );
@@ -164,16 +196,8 @@ export function RosterView({ api }: { api: GameApi }) {
         {showRot && (
           <>
             <div className="rot-toolbar">
-              <span className="dim">战术发起位置（PlayCall）：</span>
-              {POS_LIST.map((pos) => (
-                <button
-                  key={pos}
-                  className={`chip-btn ${me.initiator === pos ? 'on' : ''}`}
-                  onClick={() => { me.initiator = pos; api.tick(); }}
-                >{POS_CN[pos]}</button>
-              ))}
               <span className="spacer" />
-              <button className="btn sm" onClick={resetAll} title="清除所有自定义分钟与球权，恢复引擎自动轮换">↺ 恢复自动轮换</button>
+              <button className="btn sm" onClick={resetAll}>↺ 恢复自动轮换</button>
             </div>
             {Object.entries(posTotal).map(([pos, sum]) =>
               sum > MIN_MAX ? (
@@ -242,29 +266,38 @@ export function RosterView({ api }: { api: GameApi }) {
               onDragLeave={onDragLeave}
               onDrop={(e) => onDrop(e, pos)}
             >
-              <div className="pos-head">
+              {/* v2.7.1：战术发起位置与位置卡片合并——点这一列的标题即设为本队战术发起位置 */}
+              <div
+                className={`pos-head ${me.initiator === pos ? 'initiator' : ''}`}
+                onClick={() => { me.initiator = pos; api.tick(); }}
+                title={me.initiator === pos ? '当前战术发起位置（点其它位置可切换）' : '点击把这一位置设为战术发起位置'}
+              >
+                {me.initiator === pos && <span className="pos-init">🎯</span>}
                 {POS_CN[pos]} <span className="dim">({pos} ×{list.length})</span>
                 {posTotal[pos] != null && <span className="dim"> · {Math.round(posTotal[pos])}min</span>}
                 {dropPos === pos && <span className="drop-hint">松开换位</span>}
               </div>
               {list.map((p, i) => (
                 <div
-                  className={`roster-card ${i === 0 ? 'starter' : ''} ${dragPid === p.id ? 'dragging' : ''} ${injClass(p)}`}
+                  className={`roster-card ${i === 0 ? 'starter' : ''} ${dragPid === p.id ? 'dragging' : ''} ${injClass(p)} ${overCard && overCard.pos === pos && overCard.idx === i ? 'drop-on' : ''}`}
                   key={p.id}
                   draggable
                   onDragStart={(e) => onDragStart(e, p.id)}
-                  onDragEnd={() => { setDragPid(null); setDropPos(null); }}
+                  onDragEnd={() => { setDragPid(null); setDropPos(null); setOverCard(null); }}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (dragPid != null && dragPid !== p.id) setOverCard({ pos, idx: i }); }}
+                  onDragLeave={() => setOverCard((c) => (c && c.pos === pos && c.idx === i ? null : c))}
+                  onDrop={(e) => dropOnCard(e, pos, i)}
                   onClick={() => setSel(p)}
-                  title={`${p.name} 可打 ${POS_CN[p.pos]}/${POS_CN[p.secPos]} · 拖到另一位置列可主副互换`}
+                  title={`${p.name} 可打 ${POS_CN[p.pos]}/${POS_CN[p.secPos]} · 同列拖动 = 调整轮换顺序，拖到另一列 = 主副互换`}
                 >
                   <div className="rc-left">
                     <PlayerFace p={p} size="xs" abbr={me.abbr} />
                     <span className={`rc-ovr ${ovrClass(p.ovr)}`}>{p.ovr}</span>
                     <div className="rc-info">
                       <div className="rc-name">{p.name}{i === 0 && <span className="tag-starter">首发</span>}{p.injury && <span className="injury-tag">🏥{p.injury.games}场</span>}</div>
-                      <div className="rc-sub">{p.age}岁 · 潜{p.potential}星 · {POS_CN[p.pos]}/{POS_CN[p.secPos]}{p.min != null ? ` · ⏱${p.min}min` : ''}</div>
+                      <div className="rc-sub">{p.age}岁 · 潜{p.potential}星 · {POS_CN[p.pos]}/{POS_CN[p.secPos]}</div>
                       {(p.tags ?? []).length > 0 && (
-                        <div className="rc-tags" title="羁绊标签：同队同标签 ≥2 人组成羁绊（比赛内加成）">
+                        <div className="rc-tags">
                           {p.tags.map((t) => <span className="tag-badge xs" key={t}>{t}</span>)}
                         </div>
                       )}
@@ -273,11 +306,34 @@ export function RosterView({ api }: { api: GameApi }) {
                   <div className={`rc-mid ${poMode ? 'po' : ''}`}>
                     {poMode ? `季后赛 ${perGameLineOf(p, true)}` : perGameLineOf(p, false)}
                   </div>
-                  <div className="rc-right">
-                    <span className="rc-salary">{money(p.salary)}</span>
-                    <span className="move-btns" onClick={(e) => e.stopPropagation()}>
-                      <button disabled={i === 0} onClick={() => move(pos, i, -1)}>↑</button>
-                      <button disabled={i === list.length - 1} onClick={() => move(pos, i, 1)}>↓</button>
+                  {/* v2.7.2：上场时间与球权权重搬进卡片（原在轮换表里），并去掉薪资与 ↑↓ 按钮 */}
+                  <div className="rc-foot">
+                    <span className="rc-field" onClick={(e) => e.stopPropagation()} title="场均上场时间（0-48）">
+                      <span className="rf-label">时间</span>
+                      <button className="rf-btn" disabled={(p.min ?? autoMinOf(p)) <= 0} onClick={() => setMin(p, (p.min ?? autoMinOf(p)) - 1)}>−</button>
+                      <input
+                        type="number" min={0} max={48}
+                        value={p.min ?? ''}
+                        placeholder={String(autoMinOf(p))}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (e.target.value === '' || Number.isNaN(v)) { p.min = null; api.tick(); return; }
+                          setMin(p, v);
+                        }}
+                      />
+                      <button className="rf-btn" disabled={(p.min ?? autoMinOf(p)) >= MIN_MAX} onClick={() => setMin(p, (p.min ?? autoMinOf(p)) + 1)}>+</button>
+                    </span>
+                    <span className="rc-field" onClick={(e) => e.stopPropagation()} title="球权权重（0-10）：越大越多持球与出手">
+                      <span className="rf-label">球权</span>
+                      <input
+                        type="number" min={0} max={10}
+                        value={p.usage ?? ''}
+                        placeholder="自动"
+                        onChange={(e) => {
+                          if (e.target.value === '') { setUsage(p, null); return; }
+                          setUsage(p, Number(e.target.value));
+                        }}
+                      />
                     </span>
                   </div>
                 </div>
@@ -287,6 +343,49 @@ export function RosterView({ api }: { api: GameApi }) {
           );
         })}
       </div>
+
+      {/* v2.7.1：风格 / 执教 / 羁绊 详情弹窗 */}
+      {info && (
+        <div className="modal-mask" onClick={() => setInfo(null)}>
+          <div className="modal info-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <div className="modal-title">
+                {info.kind === 'team' ? '🌪️ 球队风格' : info.kind === 'coach' ? '⛓️ 执教风格' : '🤝 羁绊'}
+              </div>
+              <button className="btn-ghost" onClick={() => setInfo(null)}>✕</button>
+            </div>
+            <div className="info-body">
+              {info.kind === 'team' && TEAM_STYLES.map((s) => (
+                <div className={`info-row ${s.id === info.id ? 'on' : ''}`} key={s.id}>
+                  <div className="ir-title">{s.icon} {s.name}{s.id === info.id ? '（当前）' : ''}</div>
+                  <div className="ir-desc">{s.desc}</div>
+                </div>
+              ))}
+              {info.kind === 'coach' && COACH_STYLES.map((s) => (
+                <div className={`info-row ${s.id === info.id ? 'on' : ''}`} key={s.id}>
+                  <div className="ir-title">{s.icon} {s.name}{s.id === info.id ? '（当前）' : ''}</div>
+                  <div className="ir-desc">{s.desc}</div>
+                </div>
+              ))}
+              {info.kind === 'bond' && (
+                bonds.length === 0
+                  ? <div className="info-row"><div className="ir-desc">当前没有羁绊。</div></div>
+                  : bonds.map(([tag, n]) => {
+                    const k = Math.min(n - 1, 3);
+                    const who = me.players.filter((p) => (p.tags ?? []).includes(tag)).map((p) => p.name).join('、');
+                    return (
+                      <div className="info-row on" key={tag}>
+                        <div className="ir-title">{tag} ×{n}</div>
+                        <div className="ir-desc">加成 +{(k * 0.12).toFixed(2)} 进攻 / +{(k * 0.06).toFixed(2)} 防守（比赛内生效）</div>
+                        <div className="ir-desc dim">{who}</div>
+                      </div>
+                    );
+                  })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {sel && <PlayerModal player={sel} team={me} onClose={() => setSel(null)} />}
     </div>

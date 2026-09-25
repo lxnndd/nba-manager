@@ -2,6 +2,12 @@
 // 用法：node tools/ui-smoke.mjs [port]
 const port = Number(process.argv[2] || 9333);
 import fs from 'node:fs';
+import path from 'node:path';
+// v2.6.4：冒烟截图只落在**项目内**（此前硬编码写到 `C:/Users/10709/Desktop/AI/`，
+// 导致 AI 根目录堆积 25 张 png；用户要求"只在自己文件夹下存放，不要超出"）。
+// 落在 .test-out/ui-smoke/（已在 .gitignore 里），不参与交付、也不会跑到项目外。
+const ROOT = path.resolve(import.meta.dirname, '..');
+const SHOT_DIR = path.join(ROOT, '.test-out', 'ui-smoke');
 
 async function main() {
   const pageErrors = [];
@@ -57,7 +63,10 @@ async function main() {
         send('Page.captureScreenshot', { format: 'png' }),
         new Promise((_, rej) => setTimeout(() => rej(new Error('shot timeouts')), 8000)),
       ]);
-      if (r.result?.data) fs.writeFileSync(`C:/Users/10709/Desktop/AI/${name}.png`, Buffer.from(r.result.data, 'base64'));
+      if (r.result?.data) {
+        fs.mkdirSync(SHOT_DIR, { recursive: true });
+        fs.writeFileSync(path.join(SHOT_DIR, `${name}.png`), Buffer.from(r.result.data, 'base64'));
+      }
       return 'ok';
     } catch { return 'skip'; }
   };
@@ -92,6 +101,18 @@ async function main() {
     r = await ev(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('确认新建'));if(b){b.click();return 'clicked'}return 'notfound'})()`);
     log(`   结果: ${r}`);
     await sleep(400);
+  }
+  // v2.7.0：开始新游戏后先进「我是新手 / 我玩过」分流页；这里走"新手看规则 → 去选队"完整路径
+  const onGuide = await waitFor(`document.body.innerText.includes('我是新手')`, 8000);
+  log(`   v2.7.0 分流页: ${onGuide ? 'OK' : '超时'}（应出现「我是新手 / 我玩过」）`);
+  if (onGuide) {
+    r = await ev(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('我是新手'));if(b){b.click();return 'clicked'}return 'notfound'})()`);
+    await sleep(400);
+    const rulesN = await ev(`document.querySelectorAll('.rules-card').length`);
+    log(`   点「我是新手」= ${r} → 规则卡片 ${rulesN} 张（v2.7.0 应 ≥ 5）`);
+    r = await ev(`(()=>{const b=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('去选队'));if(b){b.click();return 'clicked'}return 'notfound'})()`);
+    log(`   点「我懂了，去选队」= ${r}`);
+    await sleep(500);
   }
   const onPick = await waitFor(`!!document.querySelector('.team-card')`, 10000);
   log(`   选队界面: ${onPick ? 'OK' : '超时'}`);
@@ -173,18 +194,18 @@ async function main() {
   log('7.5 自由市场位置筛选（全部 + PG/SG/SF/PF/C）...');
   r = await ev(`(()=>{const b=[...document.querySelectorAll('.tb-nav button')].find(x=>x.textContent.includes('自由市场'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
   await sleep(600);
-  const faBtns = await ev(`[...document.querySelectorAll('.fa-filter button')].map(b=>b.textContent.trim()).join(' | ')`);
-  const faBtnN = await ev(`document.querySelectorAll('.fa-filter button').length`);
+  const faBtns = await ev(`[...document.querySelectorAll('.head-tools button')].map(b=>b.textContent.trim()).join(' | ')`);
+  const faBtnN = await ev(`document.querySelectorAll('.head-tools button').length`);
   const faAll = await ev(`document.querySelectorAll('.fa-table .fa-row').length`);
   log(`   自由市场tab=${r} 筛选按钮=${faBtnN}（应 6）：${faBtns}`);
   log(`   未筛选行数=${faAll}`);
-  const faCenter = await ev(`(()=>{const b=[...document.querySelectorAll('.fa-filter button')].find(x=>x.textContent.includes('中锋'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  const faCenter = await ev(`(()=>{const b=[...document.querySelectorAll('.head-tools button')].find(x=>x.textContent.includes('中锋'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
   await sleep(500);
   const faCenterN = await ev(`document.querySelectorAll('.fa-table .fa-row').length`);
   const faPosOk = await ev(`[...document.querySelectorAll('.fa-table .fa-row .fa-pos')].every(e=>e.textContent.includes('中锋'))`);
   log(`   点「中锋」=${faCenter} 行数=${faCenterN}（应 ≤ ${faAll}）全部含中锋 = ${faPosOk}`);
   await shot('ui-smoke-6_5-fa-filter');
-  const faReset = await ev(`(()=>{const b=[...document.querySelectorAll('.fa-filter button')].find(x=>x.textContent.includes('全部'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
+  const faReset = await ev(`(()=>{const b=[...document.querySelectorAll('.head-tools button')].find(x=>x.textContent.includes('全部'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
   await sleep(300);
   const faBackN = await ev(`document.querySelectorAll('.fa-table .fa-row').length`);
   log(`   点「全部」=${faReset} 行数回到 ${faBackN}`);
@@ -325,12 +346,16 @@ async function main() {
   await sleep(500);
   const regHead = await ev(`document.querySelector('.leaders-tbl thead')?.textContent?.replace(/\\s+/g,' ') ?? ''`);
   const regRows = await ev(`document.querySelectorAll('.leaders-tbl tbody tr').length`);
+  // v2.6.3：数据榜不再截断到 20 人 —— 同时检查"人数行"与"行数远大于 20"
+  const regCount = await ev(`document.querySelector('.leaders-count')?.textContent?.replace(/\\s+/g,' ').trim() ?? ''`);
+  const regAll = regRows > 20;
   const poSwitch = await ev(`(()=>{const b=[...document.querySelectorAll('.tabs button')].find(x=>x.textContent.includes('季后赛数据'));if(!b)return 'notfound';b.click();return 'clicked'})()`);
   await sleep(500);
   const poHead = await ev(`document.querySelector('.leaders-tbl thead')?.textContent?.replace(/\\s+/g,' ') ?? ''`);
   const poRows = await ev(`document.querySelectorAll('.leaders-tbl tbody tr').length`);
   const poNote = await ev(`document.body.innerText.includes('季后赛独立统计')`);
   log(`   联盟tab=${r} 数据榜tab=${leagueTab} 常规赛表头="${regHead.trim()}"（${regRows} 行）`);
+  log(`   v2.6.3 显示全部上榜球员=${regAll}（应 true，行数应 > 20）· 人数行="${regCount}"`);
   log(`   季后赛切换=${poSwitch} 季后赛表头="${poHead.trim()}"（${poRows} 行）独立统计说明=${poNote}`);
   await shot('ui-smoke-8_5-leaders-po');
   await ev(`(()=>{const b=[...document.querySelectorAll('.tabs button')].find(x=>x.textContent.includes('常规赛数据'));if(b)b.click();return 'ok'})()`);

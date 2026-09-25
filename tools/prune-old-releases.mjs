@@ -1,11 +1,13 @@
 // 自动清理 release 目录的历史版本 exe：只保留最近 KEEP 个版本，其余删除。
 // 用法：node tools/prune-old-releases.mjs [keep]
 // 集成：package.json 的 dist 脚本在 electron-builder 之后调用（新版本产出后再清理）。
+// v2.6.4 起默认只保留 **1 个**（用户要求"之后也要更新就把旧的删了"）；
+// 需要临时多留一版做回滚时，执行 `node tools/prune-old-releases.mjs 2`。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const keep = Number(process.argv[2] || 2); // 保留最近 N 个版本（默认 2）
+const keep = Number(process.argv[2] || 1); // 保留最近 N 个版本（默认 1）
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const releaseDir = path.join(root, 'release');
 
@@ -20,9 +22,11 @@ const files = fs.readdirSync(releaseDir)
   .map((f) => ({
     name: f,
     ver: f.match(RE).slice(1, 4).map(Number),
+    mtime: fs.statSync(path.join(releaseDir, f)).mtimeMs,
   }))
-  // 按版本号降序（最新在前）
-  .sort((a, b) => (b.ver[0] - a.ver[0]) || (b.ver[1] - a.ver[1]) || (b.ver[2] - a.ver[2]));
+  // v1.0.0：按**构建时间**降序（最新构建的保留）。
+  //   原来按版本号排序，遇到"版本号回退"（如 2.7.1 → 1.0.0 公测版）会把刚打出来的新版本误删。
+  .sort((a, b) => b.mtime - a.mtime);
 
 const toDelete = files.slice(keep);
 const kept = files.slice(0, keep);

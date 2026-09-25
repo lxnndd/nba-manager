@@ -127,35 +127,6 @@ ipcMain.handle('save:remove', (e, name) => {
   return { ok: true };
 });
 
-// ---------- 存档导出 / 导入（分享给弟弟用） ----------
-ipcMain.handle('file:export', async (e, suggested, data) => {
-  const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-  const { canceled, filePath } = await dialog.showSaveDialog(win, {
-    title: '导出存档',
-    defaultPath: path.join(app.getPath('documents'), (safeName(suggested) || 'NBA存档') + '.json'),
-    filters: [{ name: 'NBA经理存档', extensions: ['json'] }]
-  });
-  if (canceled || !filePath) return { ok: false, canceled: true };
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-  return { ok: true, file: filePath };
-});
-
-ipcMain.handle('file:import', async () => {
-  const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-    title: '导入存档',
-    properties: ['openFile'],
-    filters: [{ name: 'NBA经理存档', extensions: ['json'] }]
-  });
-  if (canceled || !filePaths.length) return { ok: false, canceled: true };
-  try {
-    const data = JSON.parse(fs.readFileSync(filePaths[0], 'utf-8'));
-    return { ok: true, data, file: filePaths[0] };
-  } catch (err) {
-    return { ok: false, error: '文件不是有效的存档: ' + err.message };
-  }
-});
-
 // ---------- 启动 ----------
 app.whenReady().then(() => {
   createWindow();

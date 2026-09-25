@@ -350,7 +350,7 @@ export function ScheduleView({ api, onSeasonEnd }: { api: GameApi; onSeasonEnd: 
           <button className="btn sm" onClick={() => gotoDay(calDay - 1)} disabled={calDay <= 1}>‹ 前一天</button>
           <span className="cal-day-label">
             第 <b>{calDay}</b> / {l.totalDays} 比赛日
-            {manualDay != null && l.day !== calDay && calDay < l.day && <span className="dim">（已赛 · 点击「回到最新」跟随）</span>}
+            {manualDay != null && l.day !== calDay && calDay < l.day && <span className="dim">（已赛）</span>}
           </span>
           <button className="btn sm" onClick={() => gotoDay(calDay + 1)} disabled={calDay >= l.totalDays}>后一天 ›</button>
           <button className="btn sm" onClick={() => setManualDay(null)}>回到最新</button>

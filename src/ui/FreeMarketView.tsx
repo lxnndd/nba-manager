@@ -3,7 +3,7 @@
 //       / 硬顶队仅底薪；报价 ≥ 要价 85% 即时成交（无 AI 竞价——AI 只在休赛期行动）。
 // 休赛期的竞价式市场见 OffseasonView（另含 AI 竞争与补强）。
 import { useMemo, useState } from 'react';
-import { askFor, signFreeAgentNow, MIN_SALARY, MID_LEVEL, type FaResult } from '../engine/offseason';
+import { askFor, signFreeAgentNow, MIN_SALARY, type FaResult } from '../engine/offseason';
 import { SALARY_CAP, TAX_LINE, ROSTER_MAX, payrollOf } from '../engine/league';
 import { money, ovrClass, POS_CN } from './format';
 import { PlayerFace } from './PlayerFace';
@@ -83,29 +83,30 @@ export function FreeMarketView({ api }: { api: GameApi }) {
   const offeredList = Object.entries(offers).map(([pid, o]) => ({ pid: Number(pid), ...o }));
 
   return (
-    <div className="view">
+    <div className="view view-full">
       <div className="status-strip">
         <div className="chip">赛季 {l.season} · {l.year}</div>
         <div className="chip strong">{me.city} {me.name}</div>
         <div className="chip">
           工资单 {money(payroll)}
           {overTax
-            ? <span className="warn-text">（超奢侈税线 {money(TAX_LINE)}：只能签底薪 ≤{money(MIN_SALARY)}）</span>
-            : overCap && <span className="warn-text">（超工资帽 {money(SALARY_CAP)}：只能签底薪 ≤{money(MIN_SALARY)} 或中产 ≤{money(MID_LEVEL)}）</span>}
+            ? <span className="warn-text">（超税线：仅底薪）</span>
+            : overCap ? <span className="warn-text">（超帽：底薪或中产）</span> : null}
         </div>
         <div className="chip">剩余空间 {money(Math.max(0, SALARY_CAP - payroll))} · 自由市场 {l.freeAgents.length} 人</div>
       </div>
 
-      <div className="action-card">
-        <div className="action-title">💼 自由球员市场（赛季中 · 即时签约）</div>
-        {/* v2.5.0：位置筛选（含副位置可打的球员） */}
-        <div className="fa-filter">
-          <span className="dim">按位置筛选：</span>
-          {(['ALL', 'PG', 'SG', 'SF', 'PF', 'C'] as const).map((k) => (
-            <button key={k} className={`chip-btn ${posFilter === k ? 'on' : ''}`} onClick={() => setPosFilter(k)}>
-              {k === 'ALL' ? '全部' : POS_CN[k]} <span className="dim">{posCount[k] ?? 0}</span>
-            </button>
-          ))}
+      <div className="action-card card-col">
+        {/* v2.7.0：标题在左、位置筛选移到右上角（说明性文字已移除，规则统一放在主菜单规则页） */}
+        <div className="card-head">
+          <div className="action-title">💼 自由球员市场</div>
+          <div className="head-tools">
+            {(['ALL', 'PG', 'SG', 'SF', 'PF', 'C'] as const).map((k) => (
+              <button key={k} className={`chip-btn ${posFilter === k ? 'on' : ''}`} onClick={() => setPosFilter(k)}>
+                {k === 'ALL' ? '全部' : POS_CN[k]} <span className="dim">{posCount[k] ?? 0}</span>
+              </button>
+            ))}
+          </div>
         </div>
         {rosterFull && <div className="warn-text" style={{ marginBottom: 8 }}>⚠️ 名单已满 {ROSTER_MAX} 人：请先裁人/交易腾出名额。</div>}
 
@@ -129,7 +130,7 @@ export function FreeMarketView({ api }: { api: GameApi }) {
               </button>
             </div>
           ))}
-          {faSorted.length === 0 && <div className="hint">自由市场暂时没人——休赛期选秀落选与市场补员会带来新人。</div>}
+          {faSorted.length === 0 && <div className="hint">暂无球员</div>}
         </div>
 
         {offeredList.length > 0 && (

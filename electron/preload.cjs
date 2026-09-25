@@ -5,8 +5,6 @@ contextBridge.exposeInMainWorld('gm', {
   saveWrite: (name, data) => ipcRenderer.invoke('save:write', name, data),
   saveList: () => ipcRenderer.invoke('save:list'),
   saveRead: (name) => ipcRenderer.invoke('save:read', name),
-  saveRemove: (name) => ipcRenderer.invoke('save:remove', name),
-  // 导出/导入 .json 文件（分享存档）
-  exportFile: (suggested, data) => ipcRenderer.invoke('file:export', suggested, data),
-  importFile: () => ipcRenderer.invoke('file:import')
+  saveRemove: (name) => ipcRenderer.invoke('save:remove', name)
+  // v2.7.0：已移除存档导出/导入（用户要求不需要该功能）
 });

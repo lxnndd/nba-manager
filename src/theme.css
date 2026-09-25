@@ -244,6 +244,11 @@ tr.row-playoff .rank { color: var(--accent-2); font-weight: 800; }
 
 .leaders-wrap { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .leaders-tbl { max-width: 760px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 4px; }
+/* v2.6.3：数据榜显示全部上榜球员（不再截断 20 人）→ 用固定高度滚动容器 + 吸顶表头 */
+.leaders-box { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.leaders-count { font-size: 11.5px; color: var(--text-dim); }
+.leaders-scroll { max-height: 74vh; overflow-y: auto; overscroll-behavior: contain; border-radius: 12px; }
+.leaders-scroll thead th { position: sticky; top: 0; z-index: 2; background: var(--panel-2); }
 
 /* ===== 阵容 ===== */
 .roster-cols { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; align-items: start; }
@@ -674,14 +679,17 @@ img.player-face, img.team-logo { user-select: none; -webkit-user-drag: none; }
 .title-bg {
   position: absolute; inset: 0; z-index: 0;
   background-size: cover; background-position: center;
-  transition: background-image 1.2s ease;
+  /* v2.7.2：background-image 无法平滑过渡（会硬切/闪黑）→ 改由 opacity 做交叉淡入 */
+  transition: opacity .55s ease;
 }
 .title-bg-overlay {
   position: absolute; inset: 0; z-index: 0;
   background: linear-gradient(180deg, rgba(7,10,17,.55) 0%, rgba(9,13,21,.72) 50%, rgba(6,9,15,.86) 100%);
 }
-.title-screen > *:not(.title-bg):not(.title-bg-overlay),
-.pick-screen > *:not(.title-bg):not(.title-bg-overlay) { position: relative; z-index: 1; }
+/* v2.7.2：必须排除 .title-bg-alt——它的 class 不匹配 :not(.title-bg)，会被这条**更高优先级**的
+   规则强制成 position:relative，于是交叉淡入层掉进布局流（表现就是主菜单切图时黑一下）。 */
+.title-screen > *:not(.title-bg):not(.title-bg-alt):not(.title-bg-overlay),
+.pick-screen > *:not(.title-bg):not(.title-bg-alt):not(.title-bg-overlay) { position: relative; z-index: 1; }
 
 /* ===== v1.1：季后赛对位图（左右向中间晋级）===== */
 .poff-bracket {
@@ -955,6 +963,162 @@ tr.clickable:hover td { background: rgba(255,166,60,.07); }
 .sr-head { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
 .sr-head .dim { font-size: 11px; }
 .sr-tag { font-size: 10.5px; background: rgba(255,209,102,.18); color: #ffd166; border-radius: 6px; padding: 1px 6px; }
+
+/* =====================================================================
+   v2.7.0 UI 美化
+   ① 标题屏：真实 NBA 官方比赛照片 50 张 · 1 秒轮换（双层交叉淡入）
+   ② 自由球员市场 / 新秀榜：列表居中并铺满全屏
+   ③ 轮换与战术：压缩上下空白、加宽行（原来两侧空太多、行太窄）
+   ===================================================================== */
+/* ① 标题屏背景两层交叉淡入（TitleScreen 里按 1s 交替切换） */
+.title-bg, .title-bg-alt {
+  position: absolute; inset: 0; background-size: cover; background-position: center;
+  transition: opacity .5s ease;
+}
+.title-bg-alt { opacity: 0; }
+
+/* ② 全屏居中页 */
+.view-full { width: 100%; }
+.view-full > .status-strip,
+.view-full > .action-card { width: 100%; max-width: 1720px; margin-left: auto; margin-right: auto; }
+.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.head-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* ②a 球员列表：行更宽、字号更大、可视区更高 */
+.view-full .fa-table { max-height: 72vh; gap: 5px; }
+.view-full .fa-row { padding: 9px 16px; gap: 14px; font-size: 13.5px; }
+.view-full .fa-row .fa-name { font-size: 15px; }
+.view-full .fa-pos { font-size: 12.5px; width: auto; min-width: 96px; }
+.view-full .fa-age { font-size: 12.5px; width: auto; min-width: 96px; }
+.view-full .fa-pot { font-size: 12.5px; width: auto; min-width: 76px; }
+.view-full .fa-ask { font-size: 13.5px; width: 140px; }
+
+/* ②b 新秀榜：全屏铺满、行更宽 */
+.view-full .draft-board { max-height: 72vh; gap: 3px; }
+.view-full .db-head, .view-full .db-row {
+  grid-template-columns: 52px minmax(190px, 1.6fr) 62px 60px 76px 76px 76px 58px 104px 64px;
+  padding: 8px 14px; font-size: 13.5px; gap: 8px;
+}
+.view-full .db-head { font-size: 12px; }
+
+/* ③ 轮换与战术：压缩空白 + 加宽行 */
+.rot-panel { padding: 10px 14px; }
+.rot-toolbar { margin-bottom: 6px; }
+.rot-grid-wrap { max-height: 64vh; margin-bottom: 2px; }
+.rot-grid {
+  grid-template-columns: 40px minmax(0, 2fr) 78px minmax(0, 1.8fr) minmax(0, 1.4fr);
+  gap: 12px; padding: 3px 12px; font-size: 13px;
+}
+.rot-pos { white-space: nowrap; }
+.rot-head { padding: 4px 0 5px; font-size: 11.5px; }
+.rot-min input, .rot-usage input { padding: 4px 6px; font-size: 12.5px; }
+
+/* ④ 开始前的分流页：新手看规则 / 老手直接开始 */
+.guide-grid { display: flex; gap: 24px; justify-content: center; align-items: stretch; padding: 6vh 24px 0; flex-wrap: wrap; }
+.guide-card {
+  width: 380px; background: rgba(16,22,32,.84); border: 1px solid var(--border); border-radius: 18px;
+  padding: 30px 26px; color: var(--text); text-align: center; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  transition: transform .15s ease, border-color .15s ease, background .15s ease;
+}
+.guide-card:hover { transform: translateY(-4px); border-color: var(--accent); background: rgba(22,30,44,.94); }
+.gc-icon { font-size: 46px; line-height: 1; }
+.gc-name { font-size: 22px; font-weight: 800; }
+.gc-desc { font-size: 13px; color: var(--text-dim); line-height: 1.6; }
+
+/* ⑤ 规则总览页 */
+.rules-screen .pick-head { justify-content: space-between; }
+.rules-wrap {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 4px 24px 26px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 14px;
+  max-width: 1500px; margin: 0 auto; width: 100%;
+}
+.rules-card { background: rgba(16,22,32,.88); border: 1px solid var(--border); border-radius: 14px; padding: 14px 18px; align-self: start; }
+.rc-title { font-size: 15px; font-weight: 800; margin-bottom: 8px; }
+.rc-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.rc-list li { font-size: 13px; line-height: 1.65; }
+
+/* ⑥ 纵向排列的卡片（列表页：标题行在下、内容满宽） */
+.action-card.card-col { flex-direction: column; align-items: stretch; }
+.card-head { width: 100%; }
+
+/* =====================================================================
+   v2.7.1
+   ① 背景 5 秒轮换 + **游戏内也能看见**（固定在底层，低透明度不干扰阅读）
+   ② 球员数据榜去掉出场门槛（实时同步）
+   ③ 联盟界面内容居中、按钮加大
+   ④ 战术发起位置并入位置卡片标题
+   ⑤ 风格 / 执教 / 羁绊可点开详情
+   ===================================================================== */
+/* ① 游戏内背景层 */
+.game-bg-wrap { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: .2; }
+.game-bg {
+  position: absolute; inset: 0; background-size: cover; background-position: center;
+  transition: opacity 1s ease;
+}
+.shell > .topbar, .shell > .main, .season-banner { position: relative; z-index: 1; }
+
+/* ③ 联盟界面居中 + 大按钮 */
+.league-view > .tabs { align-self: center; }
+.league-view > .tabs .tab { font-size: 15px; padding: 9px 24px; }
+.league-view .tabs.small { align-self: center; }
+.league-view .tabs.small .tab { font-size: 13.5px; padding: 7px 18px; }
+.league-view .conf-grid { max-width: 1240px; width: 100%; margin: 0 auto; }
+.league-view .leaders-wrap { align-items: center; width: 100%; }
+.league-view .leaders-box { max-width: 1120px; margin: 0 auto; }
+.league-view .chip-btn { font-size: 13px; padding: 6px 14px; }
+
+/* ④ 战术发起位置：直接点位置卡片标题 */
+.pos-head {
+  cursor: pointer; border-radius: 8px; padding: 4px 6px 6px;
+  transition: background .15s ease, color .15s ease;
+}
+.pos-head:hover { background: rgba(255,166,60,.10); }
+.pos-head.initiator { background: rgba(255,166,60,.16); color: #fff; box-shadow: inset 0 -2px 0 var(--accent); }
+.pos-init { margin-right: 4px; }
+
+/* ⑤ 气质 chip 可点开详情 + 详情弹窗 */
+button.meta-chip { cursor: pointer; font-family: inherit; }
+.meta-chip.clickable { display: inline-flex; align-items: center; gap: 5px; }
+.meta-chip.clickable:hover { border-color: var(--accent); background: rgba(255,166,60,.14); color: #fff; }
+.chip-more { font-size: 10.5px; color: var(--accent-2); }
+.info-modal { width: min(700px, 92vw); }
+.info-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; max-height: 64vh; overflow-y: auto; }
+.info-row { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.info-row.on { border-color: rgba(255,166,60,.55); background: rgba(255,166,60,.08); }
+.ir-title { font-size: 14px; font-weight: 700; margin-bottom: 4px; }
+.ir-desc { font-size: 12.5px; color: var(--text-dim); line-height: 1.6; }
+
+/* 全局按钮略大（用户反馈偏小） */
+.chip-btn { font-size: 12.5px; padding: 6px 13px; }
+.btn.sm { font-size: 12.5px; padding: 5px 12px; }
+
+/* =====================================================================
+   v2.7.2：阵容位置卡片改造 —— 时间 / 球权 进卡片、去掉薪资、拖动排序
+   ===================================================================== */
+.pos-col { padding: 12px 12px 14px; gap: 8px; }
+.roster-card { padding: 10px 11px; gap: 6px; border-radius: 12px; }
+.roster-card.drop-on { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(255,107,53,.25); }
+.rc-name { font-size: 13.5px; }
+.rc-sub { font-size: 11px; }
+.rc-mid { font-size: 12px; padding-left: 46px; }
+.rc-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rc-field {
+  display: flex; align-items: center; gap: 3px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 2px 6px;
+}
+.rf-label { font-size: 10.5px; color: var(--text-dim); }
+.rc-field input {
+  width: 42px; min-width: 0; background: transparent; color: var(--text);
+  border: none; font-size: 12px; text-align: center; padding: 1px 0;
+}
+.rc-field input:focus { outline: none; color: var(--accent-2); }
+.rf-btn {
+  width: 18px; height: 18px; line-height: 1; padding: 0; border-radius: 5px; cursor: pointer;
+  background: var(--panel-2); color: var(--text-dim); border: 1px solid var(--border); font-size: 11px;
+}
+.rf-btn:hover:not(:disabled) { color: var(--accent-2); border-color: var(--accent-2); }
+.rf-btn:disabled { opacity: .3; cursor: default; }
 .sr-gain { margin-left: auto; font-size: 11.5px; }
 .sr-gain.good { color: #4ade80; }
 .sr-gain.bad { color: #ff8a8a; }

@@ -666,12 +666,16 @@ export function makeSchedule(teams: Team[], rng: Rng, totalDays: number): GameRe
 }
 
 // ---------- 新秀池（休赛期补人用） ----------
-export function genRookie(rng: Rng, tier: number, idSeq: { v: number }): Player {
+export function genRookie(rng: Rng, tier: number, idSeq: { v: number }, ovrBonus = 0): Player {
   // tier 0 = 状元级别（强），越大越弱。
   // v1.2 新秀压制：ovr 上限 80（<85），潜力 ≤88（让新秀 1-2 个赛季内拿奖变困难）。
   // v1.4 总评=均值+长处补偿（比 target 高 0-2）：target 上限压 77 保证 ovr≤80。
+  // v2.6.1：ovrBonus 用于"中国新秀整体加强"（用户要求平均 +10 能力）——
+  //   在 target 阶段就抬高，保证 18 项技能与总评同步（事后单改 ovr 会让技能面板与总评脱节）。
+  //   注意：gauss(rng) 仍只调用一次 → 随机序不变，未加成的球员完全不受影响。
   const pos = pick(rng, POS_ORDER);
-  const target = clamp(Math.round(76 - tier * 4 + gauss(rng) * 6), 55, 77);
+  const roll = Math.round(76 - tier * 4 + gauss(rng) * 6);
+  const target = clamp(roll + ovrBonus, 55, Math.min(77 + ovrBonus, 79));
   const p = genPlayer(rng, pos, target, undefined, true, idSeq);
   p.contractYears = 4;
   // v2.0：潜力 1-10 星（≈旧 60-88 值域映射 3-8 星，最高 8 星不给满）
@@ -711,6 +715,8 @@ function makeIntlName(rng: Rng, pool: NationPool): string {
 export const DRAFT_US = 60;
 export const DRAFT_CN = 3;
 export const DRAFT_INTL = 17;
+// v2.6.1：中国新秀整体加强（用户要求"平均加 10 能力"）
+export const DRAFT_CN_BONUS = 10;
 
 export function genDraftClass(rng: Rng): Player[] {
   const class80: Player[] = [];
@@ -718,7 +724,10 @@ export function genDraftClass(rng: Rng): Player[] {
     // tier 曲线（v2.3.0 修正）：此前 tier = i/3，从第 30 顺位起 target 就触底 → 次轮秀清一色 55 分。
     // 现在 0 → 5.4 平滑递减，让 80 人形成真实梯度（状元级 ~76 → 首轮末 ~66 → 次轮末 ~55）。
     const tier = (i / 80) * 5.4;
-    const p = genRookie(rng, tier, { v: -1 }); // id 由调用方重新分配
+    // v2.6.1：中国新秀（第 61-63 顺位段）在生成时 +DRAFT_CN_BONUS 能力；
+    //   不额外消耗 rng → 其余 77 人的生成结果与旧版逐位一致。
+    const isCn = i >= DRAFT_US && i < DRAFT_US + DRAFT_CN;
+    const p = genRookie(rng, tier, { v: -1 }, isCn ? DRAFT_CN_BONUS : 0); // id 由调用方重新分配
     p.id = -1;
     // v2.3.0 国籍分布：0-59 美国 / 60-62 中国 / 63-79 其他国家（具体国家，不再出现"欧洲/南美"这类地区名）
     //   姓名规则：美国 = 英文名（与真实名单一致）；中国 = 中文姓名；
@@ -726,7 +735,7 @@ export function genDraftClass(rng: Rng): Player[] {
     if (i < DRAFT_US) {
       p.nation = '美国';
       p.name = makeEnName(rng);
-    } else if (i < DRAFT_US + DRAFT_CN) {
+    } else if (isCn) {
       p.nation = '中国';
       // 保留 genPlayer 生成的中文姓名（姓 + 名）
     } else {
@@ -856,6 +865,22 @@ function adaptToPos(p: Player, newPos: Pos): void {
   p.attrs = attrs;
   p.pos = newPos;
   if (wBase > 0) p.ovr = clamp(Math.round(baseOvr * (wNew / wBase)), 40, 99);
+}
+
+// ---------- v2.6.2 交易估值口径：与阵容位置脱钩 ----------
+// 用户要求："换位置不变价值"要公平——球员的身价只反映他的能力，而不是玩家把他摆在哪个位置。
+// 换位（adaptToPos）只改 attrs 与当前 ovr，**不改 skills / baseSkills / baseOvr**，
+// 所以这里用「基准位置口径」的总评 = baseOvr + 技能增量（与 offseason.recalcOvr 同一公式）：
+//   把球员拖到副位置后，阵容页总评仍按新位置适配，但交易身价不再跟着变。
+// 未换位的球员 delta 为 0，结果恒等于 p.ovr → 既有基线与断言完全不受影响。
+export function valueOvr(p: Player): number {
+  // 兜底：部分构造的 Player（测试 mock、迁移途中的旧档）可能没有 skills —— 退回当前 ovr，
+  // 与 v2.6.2 之前的估值口径完全一致（不要在这里抛错，tradeValue 会被 UI 与 AI 到处调用）。
+  if (!p.skills) return p.ovr;
+  const baseSkills = p.baseSkills ?? p.skills;
+  const baseOvr = p.baseOvr ?? p.ovr;
+  const delta = calcOvr(p.skills) - calcOvr(baseSkills);
+  return clamp(Math.round(baseOvr + delta), 40, 99);
 }
 
 // 换位（v2.0 双位置语义）：每个球员只有两个位置（主 pos + 副 secPos），

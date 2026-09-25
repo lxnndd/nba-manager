@@ -183,9 +183,6 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
         <div className="action-card">
           <div className="action-title">📋 休赛期报告 · 退役与选秀（第 {l.season + 1} 赛季）</div>
           <NewsList l={l} />
-          <div className="mini-lines" style={{ marginTop: 8 }}>
-            🌱 球员成长已自动分配（优先加突出的能力 · 单项不超过 90）
-          </div>
           {draft && (
             <div className="draft-panel">
               {/* v2.4.0 乐透抽签可视化展示（此前只有一行文字播报） */}
@@ -239,7 +236,7 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
                 <>
                   <div className="btn-row">
                     <button className="btn sm" onClick={draftUserAuto}>🤖 AI 代选（最高 OVR）</button>
-                    <span className="dim">轮到你的签！从下方池子选人（点一下先看资料，确认后才算选中）</span>
+                    <span className="dim">轮到你的签！</span>
                   </div>
                   {/* v2.4.0：选中前确认——点卡片只是"选中查看"，右侧显示体测/技能摘要，确认后才真正选走 */}
                   {pendingRookie && (
@@ -254,7 +251,7 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
                             {' · '}{heightLabel(pendingRookie.height)}
                             {pendingRookie.weight ? ` · ${weightLabel(pendingRookie.weight)}` : ''}
                             {pendingRookie.wingspan ? ` · 臂展 ${wingspanLabel(pendingRookie.wingspan)}` : ''}
-                            {pendingRookie.nation !== '美国' ? ` · ${pendingRookie.nation}` : ''}
+                            {` · ${pendingRookie.nation}`}
                           </div>
                           <div className="dc-skills">
                             三分 {pendingRookie.skills.three} · 篮下 {pendingRookie.skills.layup} · 控球 {pendingRookie.skills.handle}
@@ -277,7 +274,7 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
                         <span className={`ovr-badge sm ${ovrClass(p.ovr)}`}>{p.ovr}</span>
                         <span className="dp-name">{p.name}</span>
                         <span className="dp-pos">{POS_CN[p.pos]}</span>
-                        <span className="dp-nation">{p.nation !== '美国' ? p.nation : ''}</span>
+                        <span className="dp-nation">{p.nation}</span>
                       </button>
                     ))}
                   </div>
@@ -287,7 +284,7 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
                   <button className="btn primary" onClick={draftFastToMine}>⏩ 快进到我的选秀</button>
                   <button className="btn" onClick={draftAutoOne}>▶ 进行下一签</button>
                   <button className="btn" onClick={draftAll}>⏩⏩ 自动完成全部选秀</button>
-                  <span className="dim">中间由 AI 代选，轮到你持有的签会自动停下</span>
+                  <span className="dim">轮到你持有的签会自动停下</span>
                 </div>
               )}
               {draftMsg && <div className="verdict ok" style={{ marginTop: 6 }}>{draftMsg}</div>}
@@ -298,10 +295,6 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
             <div className="action-card">
               <div className="action-title">
                 🔁 休赛期交易窗口（乐透抽签后 {l.offseasonTradeDays} 天 · 进入自由市场前关闭）
-              </div>
-              <div className="mini-lines" style={{ marginBottom: 8 }}>
-                趁选秀权落位、自由市场还没开启，和各队谈交易吧：球队定位（重建/补强/争冠）决定对方
-                看重选秀权还是即战力。
               </div>
               <div className="btn-row" style={{ marginBottom: 8 }}>
                 <button className="btn" onClick={() => setShowOffseasonTrade((v) => !v)}>
@@ -318,7 +311,7 @@ export function OffseasonView({ api, onFinished }: { api: GameApi; onFinished: (
           )}
           <div className="btn-row">
             <button className="btn primary" disabled={!!draft} onClick={enterMarket}>💰 进入自由市场</button>
-            {draft && <span className="dim">先完成选秀（或点「自动完成全部选秀」）</span>}
+            {draft && <span className="dim">选秀进行中</span>}
           </div>
         </div>
       )}

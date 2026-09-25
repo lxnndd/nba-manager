@@ -10,6 +10,7 @@ import { FreeMarketView } from './ui/FreeMarketView';
 import { LeagueView } from './ui/LeagueView';
 import { DraftView } from './ui/DraftView';
 import { OffseasonView } from './ui/OffseasonView';
+import { useBackdropRotation } from './ui/backdrops';
 import { beginOffseason } from './engine/offseason';
 
 type ViewKey = 'schedule' | 'roster' | 'trade' | 'market' | 'league' | 'draft';
@@ -22,6 +23,20 @@ const NAV: { key: ViewKey; label: string }[] = [
   { key: 'league', label: '📊 联盟' },
   { key: 'draft', label: '🎓 新秀' },
 ];
+
+// v2.7.1：游戏内背景层（用户要求"玩游戏的时候也能看见"这些真实 NBA 照片）
+// 外层 wrap 控制整体透明度（不干扰内容可读性），内层两层做交叉淡入。
+// ⚠️ 轮播状态必须留在这个子组件内部：若提到 App 层，每 5 秒一次 setState 会重渲染整页
+//   （数据榜有 450 行表格），实测会把冒烟里的多步操作拖到超时。
+function GameBackdrop() {
+  const { srcs, active } = useBackdropRotation();
+  return (
+    <div className="game-bg-wrap">
+      <div className="game-bg" style={{ backgroundImage: `url(${srcs[0]})`, opacity: active === 0 ? 1 : 0 }} />
+      <div className="game-bg" style={{ backgroundImage: `url(${srcs[1]})`, opacity: active === 1 ? 1 : 0 }} />
+    </div>
+  );
+}
 
 export default function App() {
   const api = useGame();
@@ -60,17 +75,15 @@ export default function App() {
   if (l.offseason) {
     return (
       <div className="shell">
+        <GameBackdrop />
         <header className="topbar">
           <div className="tb-left">
             <span className="logo">🏀 NBA 经理</span>
-            <span className="version">v2.6.0</span>
+            <span className="version">v1.0.0</span>
           </div>
           <div className="tb-right">
             <span className="save-state">{saveClock}</span>
             <span className="season-chip">赛季 {l.season} 结束 · 休赛期</span>
-            <button className="btn" onClick={() => api.exportSave()} title="把存档导出成文件，发给弟弟就能接着玩">
-              📤 导出存档
-            </button>
             <button className="btn danger" onClick={() => api.resetToTitle()}>主菜单</button>
           </div>
         </header>
@@ -83,10 +96,11 @@ export default function App() {
 
   return (
     <div className="shell">
+      <GameBackdrop />
       <header className="topbar">
         <div className="tb-left">
           <span className="logo">🏀 NBA 经理</span>
-          <span className="version">v2.6.0</span>
+          <span className="version">v1.0.0</span>
         </div>
         <nav className="tb-nav">
           {NAV.map((n) => (
@@ -98,9 +112,6 @@ export default function App() {
         <div className="tb-right">
           <span className="save-state">{saveClock}</span>
           <span className="season-chip">赛季 {l.season} · {l.year}</span>
-          <button className="btn" onClick={() => api.exportSave()} title="把存档导出成文件，发给弟弟就能接着玩">
-            📤 导出存档
-          </button>
           <button className="btn danger" onClick={() => api.resetToTitle()}>主菜单</button>
         </div>
       </header>

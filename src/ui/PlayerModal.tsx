@@ -112,7 +112,7 @@ export function PlayerModal({
             <div className="sec-title" style={{ marginTop: 14 }}>定位</div>
             <div className="mini-lines">
               <div>{ovrLabel(player.ovr)} · {POS_CN[player.pos]} 深度第 {depthLabel()} 位 · 可打 {POS_CN[player.pos]}/{POS_CN[player.secPos]}</div>
-              <div>潜力 {player.potential} 星（休赛期加点：潜力 × 成长阶段 × 出场时间系数）</div>
+              <div>潜力 {player.potential} 星</div>
               {player.points > 0 && <div className="warn-text">🌱 本休赛期待分配 {player.points} 点（去「休赛期」页加点）</div>}
               {player.injury && <div className="warn-text">🏥 {player.injury.type}，预计伤停 {player.injury.games} 场</div>}
             </div>

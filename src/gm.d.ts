@@ -11,8 +11,7 @@ export interface GmApi {
   saveList: () => Promise<SaveMeta[]>;
   saveRead: (name: string) => Promise<{ ok: boolean; data?: unknown; error?: string }>;
   saveRemove: (name: string) => Promise<{ ok: boolean }>;
-  exportFile: (suggested: string, data: unknown) => Promise<{ ok: boolean; canceled?: boolean; file?: string; error?: string }>;
-  importFile: () => Promise<{ ok: boolean; canceled?: boolean; data?: unknown; file?: string; error?: string }>;
+  // v2.7.0：已移除 exportFile / importFile（用户要求不需要存档导入导出）
 }
 
 declare global {

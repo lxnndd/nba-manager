@@ -32,11 +32,11 @@ export function DraftView({ api }: { api: GameApi }) {
   const count80 = list.filter((p) => p.ovr >= 80).length;
 
   return (
-    <div className="view">
+    <div className="view view-full">
       <div className="status-strip">
         <div className="chip strong">🎓 {draftYear} 年选秀预测榜</div>
         <div className="chip">共 {list.length} 名新秀 · OVR≥80 的 {count80} 人</div>
-        <div className="chip" title="选秀在赛季结束后的休赛期进行；你可以提前考察、甚至交易来更多签位">
+        <div className="chip">
           选秀时间：{l.offseason ? '休赛期进行中' : `${l.year} 赛季结束后`}
         </div>
         <div className="chip">
@@ -44,19 +44,17 @@ export function DraftView({ api }: { api: GameApi }) {
         </div>
       </div>
 
-      <div className="action-card">
-        <div className="action-title">
-          📋 球探报告 · 状元热门：{best ? `${best.name}（${POS_CN[best.pos]} · OVR ${best.ovr} · 潜力 ${best.potential} 星 · ${best.age}岁 ${heightLabel(best.height)}）` : '暂无'}
-        </div>
-        <div className="mini-lines" style={{ marginBottom: 8 }}>
-          🌱 这些新秀会在休赛期选秀大会上按签位被挑走（首轮 30 签先选、次轮 30 签后选）；
-          名单每个赛季更新一次，随时可以来这里做功课。
-        </div>
-        <div className="btn-row" style={{ marginBottom: 8 }}>
-          <span className="dim">排序：</span>
-          <button className={`chip-btn ${sortBy === 'ovr' ? 'on' : ''}`} onClick={() => setSortBy('ovr')}>按实力</button>
-          <button className={`chip-btn ${sortBy === 'age' ? 'on' : ''}`} onClick={() => setSortBy('age')}>按年龄</button>
-          <button className={`chip-btn ${sortBy === 'height' ? 'on' : ''}`} onClick={() => setSortBy('height')}>按身高</button>
+      <div className="action-card card-col">
+        {/* v2.7.0：标题在左、排序按钮移到右上角；说明性文字已移除（规则统一放在主菜单规则页） */}
+        <div className="card-head">
+          <div className="action-title">
+            📋 球探报告 · 状元热门：{best ? `${best.name}（${POS_CN[best.pos]} · OVR ${best.ovr} · 潜力 ${best.potential} 星 · ${best.age}岁 ${heightLabel(best.height)}）` : '暂无'}
+          </div>
+          <div className="head-tools">
+            <button className={`chip-btn ${sortBy === 'ovr' ? 'on' : ''}`} onClick={() => setSortBy('ovr')}>按实力</button>
+            <button className={`chip-btn ${sortBy === 'age' ? 'on' : ''}`} onClick={() => setSortBy('age')}>按年龄</button>
+            <button className={`chip-btn ${sortBy === 'height' ? 'on' : ''}`} onClick={() => setSortBy('height')}>按身高</button>
+          </div>
         </div>
 
         <div className="draft-board">
@@ -65,7 +63,7 @@ export function DraftView({ api }: { api: GameApi }) {
             <span>身高</span><span>体重</span><span>臂展</span><span>OVR</span><span>潜力</span><span>国籍</span>
           </div>
           {list.map((p, i) => (
-            <div className="db-row" key={p.id} onClick={() => setView(p)} title="点击查看完整球探资料（18 项技能 / 体测 / 生涯）">
+            <div className="db-row" key={p.id} onClick={() => setView(p)}>
               <span className="db-rank">{i + 1}</span>
               <span className="db-name">
                 <PlayerFace p={p} size="xs" />
@@ -78,10 +76,10 @@ export function DraftView({ api }: { api: GameApi }) {
               <span title={p.wingspan ? feetLabel(p.wingspan) : ''}>{p.wingspan ? wingspanLabel(p.wingspan) : '-'}</span>
               <span className={`ovr-badge sm ${ovrClass(p.ovr)}`}>{p.ovr}</span>
               <span className="db-pot">{'★'.repeat(Math.max(1, Math.min(10, p.potential)))}</span>
-              <span className="db-nation">{p.nation !== '美国' ? p.nation : ''}</span>
+              <span className="db-nation">{p.nation}</span>
             </div>
           ))}
-          {list.length === 0 && <div className="hint">暂无新秀名单（下一个休赛期会生成）。</div>}
+          {list.length === 0 && <div className="hint">暂无新秀名单</div>}
         </div>
       </div>
 

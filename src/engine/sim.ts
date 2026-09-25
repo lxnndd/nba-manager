@@ -170,7 +170,12 @@ function possession(
     const tend: Record<Pos, number> = { PG: 0.7, SG: 0.9, SF: 1.0, PF: 1.0, C: 1.0 };
     // v2.3.0：出手权按「位置倾向 × 投射威胁 × 能力^1.4」分配——此前能力只线性加权，
     // 导致球星级内线与角色球员出手数几乎一样（文班亚马 11.5 次 < 队友瓦塞尔 13.6 次）。
-    const w2 = others.map((p) => tend[p.pos] * (0.8 + p.attrs.three / 180) * Math.pow(ability(p), 1.4) * coreBoost(off.team, p));
+    // v2.6.4 修复：自定义球权（usage）此前**只作用于"谁持球"**，不影响"谁出手"——
+    //   于是"把中锋球权拉满、其他位置压低"只改变了带球人，出手数几乎不变（用户反馈）。
+    //   现在把同一个 usage 系数也乘到接球出手权重上；留空（未自定义）者恒为 1，
+    //   所以默认比赛与全部既有基线完全不受影响。
+    const uw = (p: Player) => (p.usage != null ? 0.35 + p.usage * 0.13 : 1);
+    const w2 = others.map((p) => tend[p.pos] * (0.8 + p.attrs.three / 180) * Math.pow(ability(p), 1.4) * coreBoost(off.team, p) * uw(p));
     const s2 = w2.reduce((a, b) => a + b, 0);
     let rr = rng() * s2; let oi = 0;
     for (let i = 0; i < others.length; i++) { rr -= w2[i]; if (rr <= 0) { oi = i; break; } }

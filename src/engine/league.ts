@@ -4,7 +4,7 @@ import type { AiTradeOffer, Attrs, BodyAttrs, BoxLine, DraftPick, FinalsLine, Ga
 import { SAVE_VERSION } from './types';
 import { simulateGame, teamEffMods } from './sim';
 import { rollPostGameEvent } from './events';
-import { salaryFor, resalaryIfLegacy, genFreeAgent, realFaPlayer, genBody, assignTags, deriveSkills, fromRealSkills, potentialToStar, POS_SEC, freshCareer, freshPickPool, rollPickPool, genDraftClass, ensureMeasure, freshStatLine } from './gen';
+import { salaryFor, resalaryIfLegacy, genFreeAgent, realFaPlayer, genBody, assignTags, deriveSkills, fromRealSkills, potentialToStar, POS_SEC, freshCareer, freshPickPool, rollPickPool, genDraftClass, ensureMeasure, freshStatLine, valueOvr } from './gen';
 import { REAL_FA, REAL_ROSTER, ZH_NAME_MAP, type RealPlayerInfo } from './realRoster';
 import { enNameToZh } from './data';
 import { clamp, mulberry32, type Rng } from './rng';
@@ -121,7 +121,7 @@ export interface LeaderRow {
   value: number;
 }
 
-export function leaders(l: LeagueState, stat: string, minGp = 15, playoff = false): LeaderRow[] {
+export function leaders(l: LeagueState, stat: string, minGp = 15, playoff = false, limit = Infinity): LeaderRow[] {
   const rows: LeaderRow[] = [];
   for (const t of l.teams) {
     for (const p of t.players) {
@@ -147,7 +147,9 @@ export function leaders(l: LeagueState, stat: string, minGp = 15, playoff = fals
     }
   }
   rows.sort((a, b) => b.value - a.value);
-  return rows.slice(0, 20);
+  // v2.6.3：默认返回**全部**上榜球员（用户要求"数据榜要能看到所有人"，此前写死 slice(0, 20)）；
+  //   需要限量时显式传 limit。minGp 门槛保留（场均数据需要最少出场样本）。
+  return Number.isFinite(limit) ? rows.slice(0, limit) : rows;
 }
 
 // 场均数组
@@ -352,8 +354,9 @@ const COACH_BY_SEED = ['iron', 'locker', 'brand'] as const;
 export type TeamPhase = 'contender' | 'retool' | 'rebuild';
 
 export function teamPhase(t: Team): TeamPhase {
-  const top5 = [...t.players].sort((a, b) => b.ovr - a.ovr).slice(0, 5);
-  const avg = top5.length ? top5.reduce((s, p) => s + p.ovr, 0) / top5.length : 0;
+  // v2.6.2：用 valueOvr（位置无关）判定，避免玩家靠换位影响自己与对手的阶段定位
+  const top5 = [...t.players].sort((a, b) => valueOvr(b) - valueOvr(a)).slice(0, 5);
+  const avg = top5.length ? top5.reduce((s, p) => s + valueOvr(p), 0) / top5.length : 0;
   if (avg > 85) return 'contender';
   if (avg >= 80) return 'retool';
   return 'rebuild';
@@ -372,7 +375,7 @@ export function phaseFutureWeight(phase: TeamPhase): number {
 // 某球队阶段眼中的球员价值（绝对估值，与 tradeValue 同尺度可直接比较）
 export function phaseValue(p: Player, phase: TeamPhase): number {
   const { now, future } = tradeEff(p);
-  return effToValue(now + future * phaseFutureWeight(phase));
+  return Math.round(effToValue(now + future * phaseFutureWeight(phase)) * ovrValueWeight(valueOvr(p)) * 100) / 100;
 }
 // 折算系数的展示口径（＝折算后价值 / 市场价值），用于 UI 文案"未来资产打 X 折"
 export function phasePlayerWeight(p: Player, phase: TeamPhase): number {
@@ -634,29 +637,47 @@ export function sortRoster(team: Team): void {
 //   2.475、把老将萨博尼斯 ×1.2 抬到 2.4，于是更强更年轻的球员反而被算成等价。
 //   现在球队阶段偏好**只作用于 future 部分**，当下战力（含合同性价比、球星稀缺）永远按原值计。
 export function tradeEff(p: Player): { now: number; future: number } {
-  let now = p.ovr;
+  // v2.6.2：估值口径与阵容位置脱钩——用 valueOvr（基准位置口径）而不是当前 p.ovr，
+  //   否则玩家把球员拖到副位置就能压低/抬高他的交易身价（用户反馈"换位置不变价值不太公平"）。
+  const vo = valueOvr(p);
+  let now = vo;
   let future = 0;
-  const potEff = p.ovr + (p.potential - 5) * 3; // 潜力空间折算
-  if (p.age <= 25 && potEff > p.ovr) {
+  const potEff = vo + (p.potential - 5) * 3; // 潜力空间折算
+  if (p.age <= 25 && potEff > vo) {
     // 越年轻乘数越大：1+(25-age)×0.08（clamp 0.6-1.6）
     const ageFactor = clamp(1 + (25 - p.age) * 0.08, 0.6, 1.6);
-    future += (potEff - p.ovr) * 0.55 * ageFactor;
+    future += (potEff - vo) * 0.55 * ageFactor;
   } else if (p.age <= 25) {
     future += 0.5; // 年轻即战力小加分
   }
   if (p.age >= 31) future -= (p.age - 30) * 0.8; // 31 岁起每年折损 0.8 等效能力
-  const fair = salaryFor(p.ovr);
+  const fair = salaryFor(vo);
   if (p.salary > fair * 1.15 && p.salary > 0) now -= 1.5; // 明显溢价合同
   else if (p.salary > 0 && p.salary < fair * 0.9) now += 1; // 廉价合同（新秀红利）
-  if (p.ovr >= 90) now += 1; // 顶级球星市场稀缺溢价
+  if (vo >= 90) now += 1; // 顶级球星市场稀缺溢价
   return { now, future };
 }
 function effToValue(eff: number): number {
   return Math.max(0.1, Math.round(Math.pow(2, (eff - 75) / 10) * 100) / 100);
 }
+// v2.6.1 能力档位价值系数（用户指定口径）：低能力"添头"折价、高能力核心溢价——
+//   OVR < 75      → ×0.5（对半砍）
+//   75 ≤ OVR < 80 → ×0.8（降 20%）
+//   80 ≤ OVR < 85 → ×1.0（不变）
+//   85 ≤ OVR < 90 → ×1.2（涨 20%）
+//   OVR ≥ 90      → ×1.4（涨 40%）
+// 目的：低能力球员不再能"凑数"凑出球星身价，真正的核心则更贵、更难被换走。
+// ⚠️ 同时作用于市场价 tradeValue 与决策价 phaseValue，保证"展示口径 = 判定口径"（v2.5.1 教训）。
+export function ovrValueWeight(ovr: number): number {
+  if (ovr < 75) return 0.5;
+  if (ovr < 80) return 0.8;
+  if (ovr < 85) return 1;
+  if (ovr < 90) return 1.2;
+  return 1.4;
+}
 export function tradeValue(p: Player): number {
   const { now, future } = tradeEff(p);
-  return effToValue(now + future);
+  return Math.round(effToValue(now + future) * ovrValueWeight(valueOvr(p)) * 100) / 100;
 }
 
 // 未来选秀权估值（v2.6.0：按用户指定的"初始价值"口径重做）
@@ -794,6 +815,62 @@ function tradeRuleError(l: LeagueState, teams: { t: Team; after: Player[]; sendi
   return null;
 }
 
+// ---------- v2.6.1 核心球员保护（用户指定：ovr ≥ 85 都是各队的"中流砥柱"）----------
+// 用户反馈（截图为证）：反向报价搜索器会给出「马刺送出 87/20 岁的卡斯尔，换回 85/29 岁的
+//   萨博尼斯 + 68 的夏普 + 71 的普洛登」这类方案——争冠队不可能送走自己的组队核心，
+//   更不该"用一堆添头凑价值"把核心换走。
+// 三道互补的防线（缺一不可，实测数据见 §10 经验）：
+//   ① 核心数量门槛：对方送出 N 名核心，你必须送出 ≥ N 名核心——选秀权与低能力添头不能替代核心。
+//   ② 不许降级：配对的核心 ovr 不得低于对方送出的核心（85 换不走 87）——
+//      估值再凑得上也不行，因为"换的目的是补强"，降级式换核心等于拆队。
+//   ③ 同档不许拿老换少：ovr 相同时，不能拿更老的核心去换对方更年轻的核心。
+//   另有能力档位系数 ovrValueWeight（低能力折价、高能力溢价）：
+//   <75 半价 / 75-79 八折 / 80-84 原价 / 85-89 涨 20% / ≥90 涨 40%。
+//   ⚠️ 实测（真实名单 27 组"85 核心+2 添头 换 87+ 核心"）：只靠折价仍有 11 笔成交
+//      （含用户截图中的骑士莫布利），加上 ①②③ 后归零。
+export const CORE_OVR = 85;
+
+// v2.6.2 当家球星溢价（用户指定）：球队对自己**队内前两位**球员（按 OVR 降序）的交易欲望不高，
+//   必须收到其价值 1.5 倍的回报才肯放人——大当家、二当家一视同仁。
+//   与核心门槛互补：核心门槛管"能不能换"（必须核心换核心、不许降级），本溢价管"要多少才换"。
+export const TOP2_PREMIUM = 1.5;
+
+/** 队内前二（按 OVR 降序；同分按 id 稳定排序），供交易要价与反向搜索共用 */
+export function top2Ids(t: Team): Set<number> {
+  return new Set(
+    [...t.players].sort((a, b) => valueOvr(b) - valueOvr(a) || a.id - b.id).slice(0, 2).map((p) => p.id),
+  );
+}
+
+function coreBlockReason(ai: Team, want: Player[], give: Player[]): string | null {
+  // v2.6.2：核心判定也用 valueOvr（位置无关），否则玩家把核心拖到副位置让他"掉出 85"就能规避门槛
+  const aiCores = want
+    .filter((p) => valueOvr(p) >= CORE_OVR)
+    .sort((a, b) => valueOvr(b) - valueOvr(a) || a.age - b.age);
+  if (!aiCores.length) return null;
+  const myCores = give
+    .filter((p) => valueOvr(p) >= CORE_OVR)
+    .sort((a, b) => valueOvr(b) - valueOvr(a) || a.age - b.age);
+  const who = aiCores.map((p) => `${p.name}（OVR ${valueOvr(p)} · ${p.age}岁）`).join('、');
+  if (myCores.length < aiCores.length) {
+    return `${ai.name} 拒绝交易：${who} 是队内中流砥柱（OVR ≥ ${CORE_OVR}），不接受用添头或选秀权凑价值`
+      + `——你必须送出至少 ${aiCores.length} 名 OVR ≥ ${CORE_OVR} 的核心球员来置换`;
+  }
+  for (let i = 0; i < aiCores.length; i++) {
+    const w = aiCores[i];
+    const g = myCores[i];
+    if (valueOvr(g) < valueOvr(w)) {
+      return `${ai.name} 拒绝交易：${w.name}（OVR ${valueOvr(w)} · ${w.age}岁）是队内中流砥柱，`
+        + `你给出的核心 ${g.name}（OVR ${valueOvr(g)}）档次更低——核心只能用同等或更强的核心去换`;
+    }
+    if (valueOvr(g) === valueOvr(w) && g.age > w.age) {
+      return `${ai.name} 拒绝交易：${w.name}（OVR ${valueOvr(w)} · ${w.age}岁）是队内中流砥柱，`
+        + `不会用更年轻的核心去换更老的 ${g.name}（${g.age}岁）——换来的必须让球队变强`;
+    }
+  }
+  return null;
+}
+
 export function evaluateTrade(
   l: LeagueState, fromTeamId: number, targetTeamId: number,
   givePids: number[], wantPids: number[],
@@ -823,14 +900,18 @@ export function evaluateTrade(
   if (wantPickIdx.length > 0 && payrollOf(ai.players) > TAX_LINE) {
     return { accept: false, reason: `${ai.name} 的工资单已超奢侈税线：它的未来选秀权被冻结，不在交易市场上` };
   }
+  // v2.6.1 核心门槛（先于明星/估值判定：核心问题是最硬的拒因）
+  const coreBlock = coreBlockReason(ai, want, give);
+  if (coreBlock) return { accept: false, reason: coreBlock };
   // v2.0 对方球队的现实考虑（实际薪资 + 上赛季排名）→ 明星交易可能被直接拒绝
   for (const star of want) {
-    if (star.ovr < 88) continue;
-    const fairStar = salaryFor(star.ovr);
+    const svo = valueOvr(star); // v2.6.2：明星判定同样用位置无关口径
+    if (svo < 88) continue;
+    const fairStar = salaryFor(svo);
     if (star.salary > 0 && star.salary < fairStar * 0.9) {
       return { accept: false, reason: `${ai.name} 拒绝交易：${star.name} 是廉价合同（年薪 ${moneyW(star.salary)} 低于身价 ${moneyW(fairStar)}），合同红利不卖` };
     }
-    if (star.ovr >= 90) {
+    if (svo >= 90) {
       const wrAi = ai.win / Math.max(1, ai.win + ai.loss);
       if (wrAi >= 0.55) {
         return { accept: false, reason: `${ai.name} 拒绝交易：${star.name} 是队内当家球星，且其胜率 ${(wrAi * 100).toFixed(1)}%（上季排名前 ~8）争冠球队不放人` };
@@ -877,8 +958,12 @@ export function evaluateTrade(
   const phase = teamPhase(ai);
   const wPlayer = (p: Player) => phaseValue(p, phase);
   const wPick = (v: number) => v * phasePickWeight(phase);
-  // AI 送出（want）与拿回（give）都按它的偏好折算
-  const aiGiveVal = want.reduce((s, p) => s + wPlayer(p), 0) + wPick(wvPicks);
+  // v2.6.2：队内前二当家要价 ×1.5（见 TOP2_PREMIUM）
+  const aiTop2 = top2Ids(ai);
+  const wantTop2 = want.filter((p) => aiTop2.has(p.id));
+  const askedOf = (p: Player) => wPlayer(p) * (aiTop2.has(p.id) ? TOP2_PREMIUM : 1);
+  // AI 送出（want，当家另计 1.5 倍要价）与拿回（give）都按它的偏好折算
+  const aiGiveVal = want.reduce((s, p) => s + askedOf(p), 0) + wPick(wvPicks);
   const aiGetVal = give.reduce((s, p) => s + wPlayer(p), 0) + wPick(gvPicks);
   const aiGain = aiGetVal - aiGiveVal;
   // 接受阈值：基准不吃亏超过 6% 就换（以 AI 送出物的偏好价值为基准）
@@ -903,13 +988,17 @@ export function evaluateTrade(
   }
   const valText = `${gvPlayers.toFixed(1)}${gvPicks ? `+签${gvPicks.toFixed(1)}` : ''} ↔ ${wvPlayers.toFixed(1)}${wvPicks ? `+签${wvPicks.toFixed(1)}` : ''}`;
   const wText = `按${phaseLabel(phase)}偏好折算后 你给 ${aiGetVal.toFixed(1)} / 他给 ${aiGiveVal.toFixed(1)}`;
+  // v2.6.2：被索要的当家球星按 1.5 倍计要价，文案点明，避免玩家看不懂"他给"为何偏高
+  const top2Text = wantTop2.length
+    ? `（${wantTop2.map((p) => p.name).join('、')} 是队内前二当家：要价按 ${TOP2_PREMIUM} 倍计）`
+    : '';
   if (aiGain >= -tol) {
     const feel = aiGain >= 0 ? '对方觉得这笔交易划算' : '对方觉得基本对等';
-    return { accept: true, reason: `${feel}${mood}（原始估值 ${valText}；${wText}，差 ${aiGain.toFixed(1)}）` };
+    return { accept: true, reason: `${feel}${mood}${top2Text}（原始估值 ${valText}；${wText}，差 ${aiGain.toFixed(1)}）` };
   }
   return {
     accept: false,
-    reason: `对方拒绝${mood}：送出价值 ${wv.toFixed(1)}，拿回 ${gv.toFixed(1)}（${wText}，亏 ${(-aiGain).toFixed(1)} 点，最多容忍 ${tol.toFixed(1)} 点）。原始估值：${valText}`,
+    reason: `对方拒绝${mood}：送出价值 ${wv.toFixed(1)}，拿回 ${gv.toFixed(1)}${top2Text}（${wText}，亏 ${(-aiGain).toFixed(1)} 点，最多容忍 ${tol.toFixed(1)} 点）。原始估值：${valText}`,
   };
 }
 
@@ -1324,10 +1413,12 @@ export function searchTradeTargets(
     const ai = l.teams[aiId];
     if (!ai) continue;
     const aiPhase = teamPhase(ai);
-    // 对方对"我要的东西"的估价（他们索要多少）
+    // 对方对"我要的东西"的估价（他们索要多少）；v2.6.2：队内前二当家按 1.5 倍要价——
+    //   反向搜索的筹码剪枝窗口必须跟着放大，否则会漏掉"需要多付才能换来当家"的可行方案。
+    const aiTop2 = top2Ids(ai);
     const wantVal = want.pids.reduce((s, pid) => {
       const p = ai.players.find((q) => q.id === pid);
-      return s + (p ? phaseValue(p, aiPhase) : 0);
+      return s + (p ? phaseValue(p, aiPhase) * (aiTop2.has(p.id) ? TOP2_PREMIUM : 1) : 0);
     }, 0) + want.picks.reduce((s, i) => s + pv(i) * phasePickWeight(aiPhase), 0);
     if (wantVal <= 0) continue;
     // 我方可动筹码（被锁定的球员不可交易）；价值剪枝：只保留与对方要价同量级的候选
